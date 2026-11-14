@@ -19,9 +19,11 @@
 
 {#if auth.notice}
   <div class="container">
-    <div class="alert alert-error notice" role="alert">
-      <span>{auth.notice}</span>
-      <a href="/login?redirect={encodeURIComponent(page.url.pathname + page.url.search)}">Entrar</a>
+    <div class="alert alert-{auth.notice.kind} notice" role={auth.notice.kind === 'error' ? 'alert' : 'status'}>
+      <span>{auth.notice.text}</span>
+      {#if auth.notice.kind === 'error'}
+        <a href="/login?redirect={encodeURIComponent(page.url.pathname + page.url.search)}">Entrar</a>
+      {/if}
       <button onclick={() => (auth.notice = null)} aria-label="Fechar aviso">×</button>
     </div>
   </div>

@@ -1,15 +1,27 @@
 <script lang="ts">
-  import { DISPLAY_NAME_LENGTH, normalizeDisplayName, PASSWORD_LENGTH, passwordProblems } from '@auction/shared';
+  import {
+    AUCTION_STATUS_LABELS,
+    DELETE_ACCOUNT_CONFIRMATION,
+    DISPLAY_NAME_LENGTH,
+    normalizeDisplayName,
+    PASSWORD_LENGTH,
+    passwordProblems,
+    type AccountDeletionBlockers,
+  } from '@auction/shared';
   import { goto } from '$app/navigation';
+  import { ApiError, api } from '#lib/api.ts';
   import { auth } from '#lib/auth.svelte.ts';
   import PasswordChecklist from '#lib/components/PasswordChecklist.svelte';
   import { formatDate } from '#lib/format.ts';
 
   type Feedback = { kind: 'error' | 'success'; text: string } | null;
 
+  /** Set right after deleting the account, so we go home instead of to the login page. */
+  let deleted = false;
+
   // The account page requires login
   $effect(() => {
-    if (auth.ready && !auth.user) goto('/login?redirect=/account', { replace: true });
+    if (auth.ready && !auth.user && !deleted) goto('/login?redirect=/account', { replace: true });
   });
 
   // --- Display name
@@ -75,6 +87,49 @@
       passwordFeedback = { kind: 'error', text: (err as Error).message };
     } finally {
       changingPassword = false;
+    }
+  }
+
+  // --- Delete account
+  let blockers = $state<AccountDeletionBlockers | null>(null);
+  let blockersError = $state<string | null>(null);
+  let deletePassword = $state('');
+  let deleteConfirmation = $state('');
+  let deleting = $state(false);
+  let deleteError = $state<string | null>(null);
+
+  const userId = $derived(auth.user?.id);
+  const blocked = $derived(!!blockers && (blockers.auctions.length > 0 || blockers.bids.length > 0));
+  const canSubmitDelete = $derived(!!deletePassword && deleteConfirmation === DELETE_ACCOUNT_CONFIRMATION && !deleting);
+
+  async function loadBlockers() {
+    blockersError = null;
+    try {
+      blockers = await api.get<AccountDeletionBlockers>('/account/deletion-check');
+    } catch (err) {
+      blockersError = (err as Error).message;
+    }
+  }
+
+  $effect(() => {
+    if (userId !== undefined) loadBlockers();
+  });
+
+  async function deleteAccount(event: SubmitEvent) {
+    event.preventDefault();
+    deleting = true;
+    deleteError = null;
+    try {
+      deleted = true;
+      await auth.deleteAccount(deletePassword, deleteConfirmation);
+      await goto('/', { replace: true });
+    } catch (err) {
+      deleted = false;
+      deleteError = (err as Error).message;
+      // Something new is open (e.g. a bid placed in another tab): show the updated list
+      if (err instanceof ApiError && err.status === 409) await loadBlockers();
+    } finally {
+      deleting = false;
     }
   }
 </script>
@@ -176,6 +231,61 @@
         {changingPassword ? 'Alterando…' : 'Alterar senha'}
       </button>
     </form>
+
+    <section class="auth-card danger-zone" aria-labelledby="delete-title">
+      <div>
+        <h2 id="delete-title">Excluir conta</h2>
+        <p class="muted">
+          Você sai de todos os dispositivos e não poderá mais entrar com esta conta. Os leilões e lances que você já fez
+          continuam no histórico, sem o seu nome (aparecem como “Conta excluída”). Não dá para desfazer.
+        </p>
+      </div>
+
+      {#if blockersError}
+        <p class="alert alert-error">{blockersError}</p>
+      {:else if !blockers}
+        <p class="muted small">Verificando se a conta pode ser excluída…</p>
+      {:else if blocked}
+        <div class="blockers">
+          <p><strong>Antes de excluir a conta, nada pode estar em aberto:</strong></p>
+          {#if blockers.auctions.length}
+            <p class="muted small">Seus leilões ainda ativos. Cancele os agendados ou sem lances, ou aguarde o fim deles:</p>
+            <ul>
+              {#each blockers.auctions as auction (auction.id)}
+                <li><a href="/auctions/{auction.id}">{auction.title}</a> · {AUCTION_STATUS_LABELS[auction.status]}</li>
+              {/each}
+            </ul>
+          {/if}
+          {#if blockers.bids.length}
+            <p class="muted small">Leilões em andamento em que você deu lances. Aguarde o fim deles:</p>
+            <ul>
+              {#each blockers.bids as auction (auction.id)}
+                <li><a href="/auctions/{auction.id}">{auction.title}</a></li>
+              {/each}
+            </ul>
+          {/if}
+          <button class="btn btn-ghost refresh" type="button" onclick={loadBlockers}>Verificar novamente</button>
+        </div>
+      {:else}
+        <form onsubmit={deleteAccount}>
+          <label>
+            <span>Sua senha</span>
+            <input class="input" type="password" autocomplete="current-password" required maxlength={PASSWORD_LENGTH.max} bind:value={deletePassword} />
+          </label>
+
+          <label>
+            <span>Digite <strong>{DELETE_ACCOUNT_CONFIRMATION}</strong> para confirmar</span>
+            <input class="input" autocomplete="off" autocapitalize="characters" spellcheck="false" required bind:value={deleteConfirmation} />
+          </label>
+
+          {#if deleteError}
+            <p class="alert alert-error" role="alert">{deleteError}</p>
+          {/if}
+
+          <button class="btn danger" disabled={!canSubmitDelete}>{deleting ? 'Excluindo…' : 'Excluir minha conta'}</button>
+        </form>
+      {/if}
+    </section>
   </div>
 {/if}
 
@@ -203,6 +313,53 @@
 
   h2 {
     font-size: 18px;
+  }
+
+  .danger-zone {
+    border-color: color-mix(in srgb, var(--red) 40%, var(--border));
+  }
+
+  .danger-zone form {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .danger {
+    height: 46px;
+    background: var(--red);
+    color: #fff;
+  }
+
+  .small {
+    font-size: 13px;
+  }
+
+  .blockers {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 14px;
+    background: var(--surface-2);
+    border-radius: 10px;
+    font-size: 14px;
+  }
+
+  .blockers ul {
+    margin: 0;
+    padding-left: 20px;
+  }
+
+  .blockers a {
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  .refresh {
+    align-self: flex-start;
+    height: 34px;
+    padding: 0 12px;
+    font-size: 13px;
   }
 
   input[readonly] {
