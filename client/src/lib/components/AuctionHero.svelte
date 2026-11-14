@@ -1,14 +1,15 @@
 <script lang="ts">
-  import type { Auction } from '@auction/shared';
+  import { AUCTION_STATUS_LABELS, auctionStatus, type Auction } from '@auction/shared';
   import type { Snippet } from 'svelte';
   import { page } from '$app/state';
   import { auth } from '#lib/auth.svelte.ts';
   import { clock } from '#lib/clock.svelte.ts';
-  import { formatMoney, formatTimeAgo } from '#lib/format.ts';
+  import { formatDateTime, formatMoney, formatTimeAgo } from '#lib/format.ts';
   import type { AuctionRoom } from '#lib/room.svelte.ts';
   import { flash } from '#lib/transitions.ts';
   import AuctionImage from './AuctionImage.svelte';
   import BidForm from './BidForm.svelte';
+  import CancelAuction from './CancelAuction.svelte';
   import Countdown from './Countdown.svelte';
 
   interface Props {
@@ -26,6 +27,16 @@
   const auction = $derived(room?.auction?.id === listing.id ? room.auction : listing);
   const isSeller = $derived(auth.user?.id === auction.sellerId);
   const here = $derived(encodeURIComponent(page.url.pathname + page.url.search));
+  const status = $derived(auctionStatus(auction, clock.now));
+  const scheduled = $derived(status === 'scheduled');
+  const over = $derived(status !== 'scheduled' && status !== 'live');
+
+  // Gallery: which photo is shown large (reset when showing another auction)
+  let selected = $state(0);
+  $effect(() => {
+    void auction.id;
+    selected = 0;
+  });
 </script>
 
 <article class="hero">
@@ -39,7 +50,22 @@
       {@render controls?.()}
     </header>
 
-    <AuctionImage {auction} alt={auction.title} class="cover" />
+    <AuctionImage {auction} src={auction.photos[selected]} alt="{auction.title}, foto {selected + 1} de {auction.photos.length}" class="cover" />
+    {#if auction.photos.length > 1}
+      <div class="thumbs" role="group" aria-label="Fotos do item">
+        {#each auction.photos as photo, index (photo)}
+          <button
+            type="button"
+            class:active={index === selected}
+            aria-label="Ver foto {index + 1}"
+            aria-pressed={index === selected}
+            onclick={() => (selected = index)}
+          >
+            <AuctionImage {auction} src={photo} class="thumb" loading="lazy" />
+          </button>
+        {/each}
+      </div>
+    {/if}
     {#if auction.description}
       <p class="description muted">{auction.description}</p>
     {/if}
@@ -55,10 +81,26 @@
         <span class="muted small">{auction.bidCount} {auction.bidCount === 1 ? 'lance' : 'lances'}</span>
       </div>
       <div class="ends">
-        <span class="label">Termina em</span>
-        <strong><Countdown endsAt={auction.endsAt} /></strong>
+        {#if over}
+          <span class="label">Situação</span>
+          <strong class="status status-{status}">{AUCTION_STATUS_LABELS[status]}</strong>
+        {:else}
+          <span class="label">{scheduled ? 'Começa em' : 'Termina em'}</span>
+          <strong class:starting={scheduled}><Countdown until={scheduled ? auction.startsAt : auction.endsAt} warn={!scheduled} /></strong>
+        {/if}
       </div>
     </div>
+
+    {#if status === 'cancelled'}
+      <p class="note cancelled">
+        Leilão cancelado pelo anunciante em <strong>{formatDateTime(auction.cancelledAt!)}</strong>. Ele não recebe mais lances.
+      </p>
+    {:else if scheduled}
+      <p class="note">
+        Leilão agendado: abre em <strong>{formatDateTime(auction.startsAt)}</strong> e termina em
+        <strong>{formatDateTime(auction.endsAt)}</strong>.
+      </p>
+    {/if}
 
     {#if !auth.user}
       <div class="gate">
@@ -73,7 +115,14 @@
       <p class="muted small">Entrando na sala do leilão…</p>
     {:else}
       {#if isSeller}
-        <p class="note">Este leilão é seu. Você não pode dar lances no próprio leilão.</p>
+        {#if !over}
+          <p class="note">Este leilão é seu. Você não pode dar lances no próprio leilão.</p>
+        {/if}
+        <CancelAuction {auction} />
+      {:else if status === 'cancelled'}
+        <!-- The note above already explains it -->
+      {:else if scheduled}
+        <p class="muted small">Os lances abrem quando o leilão começar.</p>
       {:else}
         {#key auction.id}
           <BidForm {auction} />
@@ -93,7 +142,7 @@
             {/each}
           </ul>
         {:else}
-          <p class="muted small">Nenhum lance ainda.{isSeller ? '' : ' Seja o primeiro!'}</p>
+          <p class="muted small">{over ? 'Nenhum lance.' : `Nenhum lance ainda.${isSeller ? '' : ' Seja o primeiro!'}`}</p>
         {/if}
       </section>
     {/if}
@@ -158,6 +207,60 @@
     aspect-ratio: 2 / 1;
     max-height: 360px;
     border-radius: 12px;
+  }
+
+  .thumbs {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+  }
+
+  .thumbs button {
+    flex-shrink: 0;
+    padding: 0;
+    border: 2px solid transparent;
+    border-radius: 10px;
+    background: none;
+    cursor: pointer;
+    opacity: 0.7;
+    transition: opacity 0.15s, border-color 0.15s;
+  }
+
+  .thumbs button:hover,
+  .thumbs button.active {
+    opacity: 1;
+  }
+
+  .thumbs button.active {
+    border-color: var(--accent);
+  }
+
+  .thumbs :global(.thumb) {
+    width: 72px;
+    height: 54px;
+    border-radius: 8px;
+  }
+
+  .starting {
+    color: var(--accent);
+  }
+
+  .status {
+    font-size: 16px;
+  }
+
+  .status-sold {
+    color: var(--green);
+  }
+
+  .status-unsold,
+  .status-cancelled {
+    color: var(--muted);
+  }
+
+  .note.cancelled {
+    background: var(--surface-2);
+    color: var(--muted);
   }
 
   .panel {

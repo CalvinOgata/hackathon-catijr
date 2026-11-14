@@ -1,4 +1,5 @@
 import type { PublicUser } from '@auction/shared';
+import { saveStore } from '../persistence';
 import { nextId, store, type UserRecord } from '../store';
 
 export class EmailTakenError extends Error {}
@@ -31,11 +32,13 @@ export function getPasswordHash(id: number): string | undefined {
 export function updateUserName(id: number, name: string): PublicUser {
   const user = store.users.get(id)!;
   user.name = name;
+  saveStore();
   return toPublicUser(user);
 }
 
 export function updatePasswordHash(id: number, passwordHash: string) {
   store.users.get(id)!.passwordHash = passwordHash;
+  saveStore();
 }
 
 /**
@@ -49,5 +52,6 @@ export function createUser(data: { name: string; email: string; passwordHash: st
   const user: UserRecord = { id: nextId('user'), name: data.name, email, passwordHash: data.passwordHash, createdAt: Date.now() };
   store.users.set(user.id, user);
   store.userIdsByEmail.set(email, user.id);
+  saveStore();
   return toPublicUser(user);
 }

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Auction } from '@auction/shared';
+  import { auctionStatus, type Auction } from '@auction/shared';
   import { page } from '$app/state';
   import { api } from '#lib/api.ts';
   import { auth } from '#lib/auth.svelte.ts';
@@ -20,8 +20,11 @@
   const userId = $derived(auth.user?.id);
 
   const featured = $derived.by(() => {
-    const list = auctions.filter((a) => a.featured);
-    return list.length ? list : auctions.slice(0, 1);
+    // Only auctions that can still be followed are featured; checked when the list loads or changes
+    const now = Date.now();
+    const active = auctions.filter((a) => ['scheduled', 'live'].includes(auctionStatus(a, now)));
+    const list = active.filter((a) => a.featured);
+    return list.length ? list : active.slice(0, 1);
   });
   const hero = $derived(featured.length ? featured[heroIndex % featured.length] : undefined);
   const heroId = $derived(hero?.id);

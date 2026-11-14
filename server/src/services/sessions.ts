@@ -1,11 +1,15 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { config } from '../config';
+import { saveStore } from '../persistence';
 import { nextId, store, type SessionRecord } from '../store';
 
 export interface Session {
   id: number;
   user: { id: number; name: string };
 }
+
+// Renewals happen on every request; only write them to disk when they move the expiry noticeably
+const PERSIST_RENEWAL_MS = Math.min(60 * 1000, config.session.idleTimeoutMs / 10);
 
 const hashToken = (token: string) => createHash('sha256').update(token).digest('hex');
 
@@ -23,6 +27,7 @@ export function createSession(userId: number): string {
   };
   store.sessions.set(session.id, session);
   store.sessionIdsByTokenHash.set(session.tokenHash, session.id);
+  saveStore();
   return token;
 }
 
@@ -39,7 +44,10 @@ function use(session: SessionRecord | undefined): Session | null {
     return null;
   }
 
-  session.expiresAt = Math.min(now + config.session.idleTimeoutMs, session.absoluteExpiresAt);
+  const renewed = Math.min(now + config.session.idleTimeoutMs, session.absoluteExpiresAt);
+  const persist = renewed - session.expiresAt > PERSIST_RENEWAL_MS;
+  session.expiresAt = renewed;
+  if (persist) saveStore();
 
   const user = store.users.get(session.userId)!;
   return { id: session.id, user: { id: user.id, name: user.name } };
@@ -60,11 +68,16 @@ export function isSessionActive(id: number): boolean {
   return !!session && Date.now() < session.expiresAt;
 }
 
-export function deleteSession(id: number) {
+function removeSession(id: number): boolean {
   const session = store.sessions.get(id);
-  if (!session) return;
+  if (!session) return false;
   store.sessions.delete(id);
   store.sessionIdsByTokenHash.delete(session.tokenHash);
+  return true;
+}
+
+export function deleteSession(id: number) {
+  if (removeSession(id)) saveStore();
 }
 
 /** Ends every session of a user except one (e.g. after a password change). Returns the ended ids. */
@@ -72,16 +85,19 @@ export function deleteOtherSessions(userId: number, keepSessionId: number): numb
   const ended: number[] = [];
   for (const session of store.sessions.values()) {
     if (session.userId === userId && session.id !== keepSessionId) {
-      deleteSession(session.id);
+      removeSession(session.id);
       ended.push(session.id);
     }
   }
+  if (ended.length) saveStore();
   return ended;
 }
 
 export function deleteExpiredSessions() {
   const now = Date.now();
+  let removed = false;
   for (const session of store.sessions.values()) {
-    if (now >= session.expiresAt) deleteSession(session.id);
+    if (now >= session.expiresAt) removed = removeSession(session.id) || removed;
   }
+  if (removed) saveStore();
 }

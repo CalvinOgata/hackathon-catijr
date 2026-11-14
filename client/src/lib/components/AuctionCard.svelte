@@ -1,16 +1,20 @@
 <script lang="ts">
-  import type { Auction } from '@auction/shared';
+  import { AUCTION_STATUS_LABELS, auctionStatus, type Auction } from '@auction/shared';
+  import { clock } from '#lib/clock.svelte.ts';
   import { formatMoney } from '#lib/format.ts';
   import { flash } from '#lib/transitions.ts';
   import AuctionImage from './AuctionImage.svelte';
   import Countdown from './Countdown.svelte';
 
   let { auction }: { auction: Auction } = $props();
+
+  const status = $derived(auctionStatus(auction, clock.now));
+  const scheduled = $derived(status === 'scheduled');
 </script>
 
 <a href="/auctions/{auction.id}" class="card">
   <div class="top">
-    <AuctionImage {auction} class="thumb" loading="lazy" />
+    <AuctionImage {auction} src={auction.photos[0]} class="thumb" loading="lazy" />
     <h3>{auction.title}</h3>
   </div>
 
@@ -23,13 +27,18 @@
 
   <div class="footer">
     <span class="tag">{auction.category}</span>
-    <span class="time">
+    {#if status !== 'scheduled' && status !== 'live'}
+      <span class="final final-{status}">{AUCTION_STATUS_LABELS[status]}</span>
+    {:else}
+    <span class="time" class:scheduled title={scheduled ? 'Começa em' : 'Termina em'}>
+      {#if scheduled}<span class="starts">Começa em</span>{/if}
       <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
         <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2" />
         <path d="M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
       </svg>
-      <Countdown endsAt={auction.endsAt} />
+      <Countdown until={scheduled ? auction.startsAt : auction.endsAt} warn={!scheduled} />
     </span>
+    {/if}
   </div>
 </a>
 
@@ -106,6 +115,27 @@
 
   .tag {
     color: var(--muted);
+  }
+
+  .final {
+    font-weight: 600;
+    color: var(--muted);
+  }
+
+  .final-sold {
+    color: var(--green);
+  }
+
+  .card:has(.final-cancelled) {
+    opacity: 0.65;
+  }
+
+  .time.scheduled {
+    color: var(--accent);
+  }
+
+  .starts {
+    font-weight: 500;
   }
 
   .time {

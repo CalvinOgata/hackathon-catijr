@@ -1,6 +1,8 @@
 import type { Category } from '@auction/shared';
 import { createAuction } from './services/auctions';
 import { hashPassword } from './services/passwords';
+
+const HOUR = 60 * 60 * 1000;
 import { createUser } from './services/users';
 
 // A regular user that owns the sample listings (there are no admins, RF03).
@@ -9,7 +11,8 @@ export const DEMO_SELLER = { name: 'Arremate Demo', email: 'demo@arremate.dev', 
 
 // Placeholder catalog so the UI has something to show in development.
 // Prices are in reais here and converted to cents on insert.
-const AUCTIONS: { title: string; category: Category; price: number; increment: number; endsIn: number; featured: boolean; description: string }[] = [
+// `startsIn`/`endsIn` are hours from now: a negative start means it's already running.
+const AUCTIONS: { title: string; category: Category; price: number; increment: number; startsIn?: number; endsIn: number; featured: boolean; description: string }[] = [
   { title: 'Rolex Submariner 1968, mostrador original', category: 'Relógios', price: 85_000, increment: 500, endsIn: 26, featured: true,
     description: 'Ref. 5513 em estado notável, com caixa e comprovantes de revisão de 2019. Um dos relógios de mergulho vintage mais desejados.' },
   { title: 'Pintura a óleo original "Ipanema ao Entardecer"', category: 'Arte', price: 12_000, increment: 250, endsIn: 50, featured: true,
@@ -30,23 +33,28 @@ const AUCTIONS: { title: string; category: Category; price: number; increment: n
     description: 'Produção licenciada Herman Miller em nogueira e couro preto. Pátina leve, estrutura impecável.' },
   { title: 'Charizard Pokémon Base Set, PSA 9', category: 'Colecionáveis', price: 22_000, increment: 250, endsIn: 2, featured: false,
     description: 'Edição Unlimited, nota Mint 9. Case limpo e centralização excelente.' },
+  { title: 'Vitrola Gradiente anos 70, funcionando', category: 'Música', price: 1_800, increment: 50, startsIn: 0.25, endsIn: 3, featured: false,
+    description: 'Toca-discos com receiver embutido, revisado. Acompanha tampa de acrílico original e manual.' },
   { title: 'Mesa de jantar em jacarandá entalhada à mão', category: 'Design', price: 9_500, increment: 100, endsIn: 40, featured: false,
     description: 'Para oito lugares. Feita nos anos 1960 por uma oficina mineira, com madeira de demolição certificada.' },
 ];
 
-/** Fills the in-memory store with sample data. Runs on every start, since memory begins empty. */
+/** Sample data for the very first start (when there's no saved data on disk yet). */
 export async function seed() {
   const seller = createUser({ ...DEMO_SELLER, passwordHash: await hashPassword(DEMO_SELLER.password) });
 
   AUCTIONS.forEach((auction, i) => {
+    const startsAt = Date.now() + (auction.startsIn ?? -1) * HOUR;
     createAuction(seller.id, {
       title: auction.title,
       description: auction.description,
-      imageUrl: `https://picsum.photos/seed/auction-${i + 1}/960/640`,
       category: auction.category,
+      // Placeholder pictures; real auctions upload their own (at least 3, RF05)
+      photos: [1, 2, 3].map((n) => `https://picsum.photos/seed/auction-${i + 1}-${n}/960/640`),
       startingPrice: auction.price * 100,
       minIncrement: auction.increment * 100,
-      durationMinutes: auction.endsIn * 60,
+      startsAt,
+      durationMinutes: Math.round((Date.now() + auction.endsIn * HOUR - startsAt) / 60_000),
       featured: auction.featured,
     });
   });

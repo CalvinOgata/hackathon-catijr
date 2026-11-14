@@ -12,7 +12,6 @@ const FIELD_LABELS: Record<string, string> = {
   title: 'Nome',
   description: 'Descrição',
   category: 'Categoria',
-  imageUrl: 'URL da imagem',
   startingPrice: 'Preço inicial',
   minIncrement: 'Incremento mínimo',
   durationMinutes: 'Duração (minutos)',

@@ -52,7 +52,7 @@
       {#if !auth.ready}
         <!-- Avoid flashing the login buttons while the session is restored -->
       {:else if auth.user}
-        <a href="/sell" class="btn btn-primary">Anunciar<span class="wide">&nbsp;item</span></a>
+        <a href="/sell" class="btn btn-primary">Anunciar<span class="wide">item</span></a>
         <a href="/account" class="btn btn-ghost account" title="Minha conta" aria-label="Minha conta ({auth.user.name})">
           <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
             <circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" stroke-width="2" />

@@ -10,7 +10,7 @@ PACKAGE_FILES  := package.json $(wildcard package-lock.json) shared/package.json
 
 .DEFAULT_GOAL := help
 
-.PHONY: help setup dev server client check build start clean reset check-node check-ports
+.PHONY: help setup dev server client check build start reset-data clean reset check-node check-ports
 
 help: ## Show this help
 	@echo "Usage: make <command>"
@@ -38,6 +38,10 @@ build: setup ## Build server and client for production
 
 start: build check-ports ## Build, then run the production build locally
 	npx concurrently -n server,client -c blue,magenta "npm run start -w server" "npm run preview -w client -- --port $(CLIENT_PORT) --strictPort"
+
+reset-data: ## Delete saved data and uploaded photos (sample data is created again on next start)
+	rm -rf server/data
+	@echo "Data removed. Sample data will be created again on the next start."
 
 clean: ## Remove build output
 	rm -rf server/dist client/build client/.svelte-kit

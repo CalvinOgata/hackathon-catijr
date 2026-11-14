@@ -26,7 +26,8 @@ export class ApiError extends Error {
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const headers: Record<string, string> = {};
-  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  const isForm = body instanceof FormData; // the browser sets the multipart boundary itself
+  if (body !== undefined && !isForm) headers['Content-Type'] = 'application/json';
   if (authToken) headers.Authorization = `Bearer ${authToken}`;
 
   let res: Response;
@@ -34,7 +35,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     res = await fetch(`${API_URL}/api${path}`, {
       method,
       headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: body === undefined ? undefined : isForm ? body : JSON.stringify(body),
     });
   } catch {
     throw new ApiError(0, 'Não foi possível conectar ao servidor. Verifique sua conexão.');

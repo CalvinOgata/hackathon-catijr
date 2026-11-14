@@ -25,6 +25,7 @@ export class AuctionRoom {
     watchers.set(auctionId, (watchers.get(auctionId) ?? 0) + 1);
     socket.on('connect', this.#join); // the server forgets rooms when a connection drops
     socket.on('room:bid', this.#onBid);
+    socket.on('auction:updated', this.#onUpdated); // status changes without a bid, e.g. cancelled (RF08)
     if (socket.connected) this.#join();
   }
 
@@ -33,6 +34,7 @@ export class AuctionRoom {
     this.#left = true;
     socket.off('connect', this.#join);
     socket.off('room:bid', this.#onBid);
+    socket.off('auction:updated', this.#onUpdated);
 
     const remaining = (watchers.get(this.auctionId) ?? 1) - 1;
     if (remaining > 0) watchers.set(this.auctionId, remaining);
@@ -59,6 +61,10 @@ export class AuctionRoom {
     } catch {
       if (!this.#left) this.error = 'Não foi possível acessar a sala do leilão. Tentaremos de novo quando a conexão voltar…';
     }
+  };
+
+  #onUpdated = (auction: Auction) => {
+    if (auction.id === this.auctionId && this.auction) this.auction = auction;
   };
 
   #onBid = ({ auction, bid }: { auction: Auction; bid: Bid }) => {
