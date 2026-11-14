@@ -78,6 +78,12 @@ When the server ends a session, the client logs out and shows a "session expired
   Trade-off: someone who knows your email can lock your login for 15 minutes; we accepted that in exchange for stopping password guessing.
 - **My account (`/account`):** change the display name and the password. The email can't be changed, because it identifies the account (RF01).
   Changing the password logs out every other device of that account.
+- **Deleting an account** (not covered by the requirements, so a team decision): allowed only when nothing is still open —
+  none of the user's own auctions is scheduled or live, and they have no bid in a live auction — after retyping the password
+  (it counts toward the login-attempt limit) and typing `DELETAR`. The account is **anonymized, not erased**: the name becomes
+  "Conta excluída", login stops working, every session ends and the email is released for a future account (RF01 still holds:
+  one email, one account at a time). Its auctions, bids, results and photos stay, because RF08 says nothing is deleted and
+  results, seller profiles (RF22), "Minhas participações" (RF27) and purchase history (RF31) depend on them.
 
 **Demo account** (owns the sample listings, useful to see the seller's view): `demo@arremate.dev` / `Demo@12345`.
 
@@ -91,6 +97,8 @@ When the server ends a session, the client logs out and shows a "session expired
 | GET    | `/auth/me`          | ✔       | Current user (with `createdAt`)            |
 | PATCH  | `/account`          | ✔       | Change display name: `{ name }`            |
 | PUT    | `/account/password` | ✔       | `{ currentPassword, newPassword }`; ends the account's other sessions |
+| GET    | `/account/deletion-check` | ✔ | What still prevents deleting the account (active auctions, bids in live auctions) |
+| POST   | `/account/delete`   | ✔       | `{ password, confirmation: "DELETAR" }`; `409` while something is still open |
 | GET    | `/auctions?q=`      |         | List or search listings (live ones first)  |
 | GET    | `/auctions/rules`   |         | The limits for creating an auction (RF06) |
 | GET    | `/auctions/:id`     |         | One listing (no bids: those are in the room) |
@@ -163,7 +171,7 @@ client/src/
     ├── +page.svelte        featured auction carousel + grid of all auctions/search results
     ├── auctions/[id]/      listing (public) + live room (logged in)
     ├── sell/               list an item
-    ├── account/            my account (name, password)
+    ├── account/            my account (name, password, delete account)
     ├── login/
     └── signup/
 ```
