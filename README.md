@@ -60,6 +60,12 @@ The Makefile only wraps npm scripts, so `npm run dev`, `npm run build`, etc. sti
 | **RF05** · Create an auction with name, description, category, ≥ 3 photos, starting price, start time and duration. | "Anunciar item" form (`/sell`), sent as one multipart request; the server validates every field and photo before saving anything. The start is either "as soon as possible" or a chosen date/time, checked against the **server's** clock. Bids before the start are rejected. |
 | **RF08** · The seller cancels their own auction while scheduled or live without bids; nothing is deleted. | "Cancelar leilão" on the auction page (seller only, with a confirmation step). The server re-checks seller, state and bids; a cancelled auction keeps all its data and photos, is marked **Cancelado**, rejects bids and is announced live to listings and rooms. A bid and a cancellation arriving together can't both succeed: they run one after the other, so whichever comes first wins. |
 | **RF06** · Limits are easy to change (e.g. a demo auction that opens in 1 minute and lasts 3). | Every limit is in one place, `server/src/config.ts`; the time and photo limits can be overridden in `server/.env` without touching code. The form reads them from `GET /api/auctions/rules`, so it always matches the server. |
+| **RF09** · Live auction room with real-time updates and masked leader identity. | Socket.io room broadcasts every bid instantly (`room:bid`, `auction:updated`). The leader's full name is never exposed (`maskBidderName`, e.g. "Carlos S.", "C***n"). When over, participants see "Vendido" (with winner and amount) or "Encerrado sem lances". |
+| **RF10** · Bid acceptance rules. | Bids require: valid session, membership in the auction room, live state (`startsAt <= now < endsAt`), author not seller or current leader, and amount $\ge$ current minimum bid. Refused bids return the reason and current minimum bid (`currentMinBid`). Bids are irrevocable. |
+| **RF11** · Bid concurrency and atomic recording. | In-memory read-check-write runs synchronously on Node's single thread. The state is flushed to disk (`saveStore()`) before any broadcast or response is sent, guaranteeing strict consistency. |
+| **RF12** · Bid idempotency. | The client generates a unique `idempotencyKey` per bid intent. Re-submissions (double clicks, retries) return the original successful result without creating a duplicate bid. |
+| **RF13** · Bid rate limiting. | Limits requests to at least 500 ms between bids for the same user. Legitimate RF12 retries pass through without penalty, and other users are not blocked. |
+| **RF14** · Dynamic minimum bid calculation. | Strict adherence to the hackathon's official tiered increment table based on the current price (cents-precise, strictly increasing, deterministic). |
 
 **Team decision (RF02):** sessions **renew with use**. A session ends after **2 hours without any authenticated action**,
 and in any case **7 days after login**. Both are configurable in `server/.env` (`SESSION_IDLE_MINUTES`, `SESSION_MAX_DAYS`).
@@ -79,7 +85,12 @@ When the server ends a session, the client logs out and shows a "session expired
 - **My account (`/account`):** change the display name and the password. The email can't be changed, because it identifies the account (RF01).
   Changing the password logs out every other device of that account.
 
-**Demo account** (owns the sample listings, useful to see the seller's view): `demo@arremate.dev` / `Demo@12345`.
+**Demo accounts** (RNF04: ao menos 1 comitente e 3 compradores com dados de demonstração):
+- **Comitente / Seller:** `demo@arremate.dev` / `Demo@12345` (possui os leilões de exemplo; acesse para ver a visão de vendedor)
+- **Compradores / Buyers:**
+  - `comprador1@arremate.dev` / `Demo@12345` (Bernardo Lima)
+  - `comprador2@arremate.dev` / `Demo@12345` (Camila Rocha)
+  - `comprador3@arremate.dev` / `Demo@12345` (Daniel Souza)
 
 ### REST API (`/api`)
 
@@ -110,7 +121,7 @@ Anyone can connect (to receive public listing updates). Send the session token i
 | -------------------- | ----------------- | ---------------------------------------------------------- |
 | client → server      | `room:join`       | `auctionId`, ack → `{ ok, auction }` with recent bids (session required) |
 | client → server      | `room:leave`      | `auctionId`                                                |
-| client → server      | `bid:place`       | `{ auctionId, amount }`, ack → `{ ok }` or `{ ok: false, error, code? }` (session + room required) |
+| client → server      | `bid:place`       | `{ auctionId, amount, idempotencyKey? }`, ack → `{ ok: true, auction, bid }` or `{ ok: false, error, code?, currentMinBid? }` (session + room required) |
 | server → everyone    | `auction:created` | new listing                                                |
 | server → everyone    | `auction:updated` | listing after a bid (price, bid count — no bidder)         |
 | server → room        | `room:bid`        | `{ auction, bid }` with the bidder's name                  |

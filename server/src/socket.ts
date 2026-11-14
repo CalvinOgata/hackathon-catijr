@@ -1,8 +1,8 @@
-import { SESSION_INVALID, type ClientToServerEvents, type Failure, type ServerToClientEvents } from '@auction/shared';
+import { minNextBid, SESSION_INVALID, type ClientToServerEvents, type Failure, type ServerToClientEvents } from '@auction/shared';
 import type { FastifyInstance } from 'fastify';
 import { Server, type Socket } from 'socket.io';
 import { config } from './config';
-import { BidError, getAuctionDetail, placeBid } from './services/auctions';
+import { BidError, getAuction, getAuctionDetail, placeBid } from './services/auctions';
 import { deleteExpiredSessions, isSessionActive, useSessionById, useSessionByToken, type Session } from './services/sessions';
 
 interface SocketData {
@@ -87,24 +87,35 @@ export function registerSocket(app: FastifyInstance) {
       const session = requireSession(socket);
       if (!session) return ack(sessionFailure);
 
-      const { auctionId, amount } = payload ?? {};
+      const { auctionId, amount, idempotencyKey } = payload ?? {};
       if (!isAuctionId(auctionId) || !Number.isInteger(amount) || amount <= 0) {
-        return ack({ ok: false, error: 'Lance inválido' });
+        return ack({ ok: false, error: 'Lance inválido', code: 'INVALID_BID' });
       }
       if (!socket.rooms.has(roomName(auctionId))) {
-        return ack({ ok: false, error: 'Entre na sala do leilão para dar lances' });
+        return ack({ ok: false, error: 'Entre na sala do leilão para dar lances', code: 'NOT_IN_PROGRESS' });
       }
 
       try {
-        const result = placeBid(auctionId, session.user, amount);
-        // Listings are public, but who bid is only shared with the room
-        io.emit('auction:updated', result.auction);
-        io.to(roomName(auctionId)).emit('room:bid', result);
-        ack({ ok: true });
+        const result = placeBid(auctionId, session.user, amount, idempotencyKey);
+        // Listings are public, but who bid is only shared with the room (RF09, RF11)
+        if (!result.isReplay) {
+          io.emit('auction:updated', result.auction);
+          io.to(roomName(auctionId)).emit('room:bid', result);
+        }
+        ack({ ok: true, auction: result.auction, bid: result.bid });
       } catch (err) {
-        if (err instanceof BidError) return ack({ ok: false, error: err.message });
+        if (err instanceof BidError) {
+          return ack({
+            ok: false,
+            error: err.message,
+            code: err.code,
+            currentMinBid: err.currentMinBid,
+          });
+        }
         app.log.error(err, 'Failed to place bid');
-        ack({ ok: false, error: 'Algo deu errado. Tente novamente.' });
+        const auction = getAuction(auctionId);
+        const minVal = auction ? minNextBid(auction) : 0;
+        ack({ ok: false, error: 'Algo deu errado. Tente novamente.', currentMinBid: minVal });
       }
     });
   });

@@ -42,6 +42,23 @@ export const CATEGORIES = ['Arte', 'Colecionáveis', 'Design', 'Eletrônicos', '
 export type Category = (typeof CATEGORIES)[number];
 
 /**
+ * Masks a user's display name to identify them without exposing their full name (RF09).
+ * E.g. "Carlos Eduardo da Silva" -> "Carlos S.", "Calvin" -> "C***n"
+ */
+export function maskBidderName(name: string): string {
+  const trimmed = name.trim().replace(/\s+/g, ' ');
+  if (!trimmed) return 'Anônimo';
+  const parts = trimmed.split(' ');
+  if (parts.length >= 2) {
+    const first = parts[0];
+    const last = parts[parts.length - 1];
+    return `${first} ${last[0].toUpperCase()}.`;
+  }
+  if (trimmed.length <= 2) return `${trimmed[0]}*`;
+  return `${trimmed[0]}${'*'.repeat(Math.max(1, trimmed.length - 2))}${trimmed[trimmed.length - 1]}`;
+}
+
+/**
  * An auction as the API sends it: the item's data (name, description, category, photos)
  * merged with this auction of it (start, end, prices). An item can be auctioned more than
  * once over time, so the two are stored separately.
@@ -65,6 +82,8 @@ export interface Auction {
   endsAt: string; // ISO date
   /** Set when the seller cancelled it (RF08). Cancelled auctions are kept, never deleted. */
   cancelledAt: string | null; // ISO date
+  highestBidderId: number | null;
+  highestBidderName: string | null;
 }
 
 /** The five states an auction can be in (RN01). */
@@ -98,7 +117,8 @@ export interface Bid {
   id: number;
   auctionId: number;
   amount: number;
-  bidderName: string;
+  bidderId: number;
+  bidderName: string; // masked (RF09)
   createdAt: string; // ISO date
 }
 
@@ -139,7 +159,23 @@ export const SESSION_INVALID = 'SESSION_INVALID';
 
 export type Failure = { ok: false; error: string; code?: typeof SESSION_INVALID };
 
-export type BidResult = { ok: true } | Failure;
+export type BidFailureCode =
+  | typeof SESSION_INVALID
+  | 'RATE_LIMITED'
+  | 'BELOW_MINIMUM'
+  | 'NOT_IN_PROGRESS'
+  | 'SELF_BID'
+  | 'ALREADY_LEADER'
+  | 'INVALID_BID';
+
+export type BidFailure = {
+  ok: false;
+  error: string;
+  code?: BidFailureCode;
+  currentMinBid?: number;
+};
+
+export type BidResult = { ok: true; auction?: Auction; bid?: Bid } | BidFailure;
 
 export type JoinRoomResult = { ok: true; auction: AuctionDetail } | Failure;
 
@@ -157,10 +193,35 @@ export interface ServerToClientEvents {
 export interface ClientToServerEvents {
   'room:join': (auctionId: number, ack: (result: JoinRoomResult) => void) => void;
   'room:leave': (auctionId: number) => void;
-  'bid:place': (payload: { auctionId: number; amount: number }, ack: (result: BidResult) => void) => void;
+  'bid:place': (
+    payload: { auctionId: number; amount: number; idempotencyKey?: string },
+    ack: (result: BidResult) => void,
+  ) => void;
 }
 
-/** The lowest amount the next bid can have. The first bid may match the starting price. */
-export function minNextBid(auction: Pick<Auction, 'bidCount' | 'currentPrice' | 'minIncrement'>): number {
-  return auction.bidCount === 0 ? auction.currentPrice : auction.currentPrice + auction.minIncrement;
+/**
+ * Increment table by current price level (RF14). All values in cents.
+ * Até R$ 99,99 -> R$ 1,00 (100 centavos)
+ * R$ 100,00 a R$ 499,99 -> R$ 5,00 (500 centavos)
+ * R$ 500,00 a R$ 999,99 -> R$ 10,00 (1.000 centavos)
+ * R$ 1.000,00 a R$ 4.999,99 -> R$ 50,00 (5.000 centavos)
+ * R$ 5.000,00 a R$ 24.999,99 -> R$ 100,00 (10.000 centavos)
+ * A partir de R$ 25.000,00 -> R$ 500,00 (50.000 centavos)
+ */
+export function calculateMinIncrement(currentPriceInCents: number): number {
+  if (currentPriceInCents <= 9_999) return 100;
+  if (currentPriceInCents <= 49_999) return 500;
+  if (currentPriceInCents <= 99_999) return 1_000;
+  if (currentPriceInCents <= 499_999) return 5_000;
+  if (currentPriceInCents <= 2_499_999) return 10_000;
+  return 50_000;
+}
+
+/**
+ * The lowest amount the next bid can have (RF14).
+ * The first bid may match the starting price.
+ * Subsequent bids must increment at least according to the official table.
+ */
+export function minNextBid(auction: Pick<Auction, 'bidCount' | 'currentPrice'>): number {
+  return auction.bidCount === 0 ? auction.currentPrice : auction.currentPrice + calculateMinIncrement(auction.currentPrice);
 }
