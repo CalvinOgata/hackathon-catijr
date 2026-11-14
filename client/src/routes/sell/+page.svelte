@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Auction, ListingRules } from '@auction/shared';
+  import { calculateMinIncrement, type Auction, type ListingRules } from '@auction/shared';
   import { onDestroy } from 'svelte';
   import { goto } from '$app/navigation';
   import { api } from '#lib/api.ts';
@@ -32,7 +32,6 @@
   let description = $state('');
   /** In reais, as typed. */
   let startingPrice = $state<number | null>(null);
-  let minIncrement = $state<number | null>(10);
   let startMode = $state<'asap' | 'scheduled'>('asap');
   /** `datetime-local` value, in the viewer's timezone. */
   let startLocal = $state('');
@@ -136,7 +135,6 @@
     form.append('category', category);
     form.append('description', description);
     form.append('startingPrice', String(toCents(startingPrice)));
-    form.append('minIncrement', String(toCents(minIncrement)));
     form.append('durationMinutes', String(durationMinutes));
     // The browser converts the local time to an absolute instant (RF19); the server checks it with its own clock (RF16)
     if (startMode === 'scheduled') form.append('startsAt', new Date(startTime).toISOString());
@@ -261,18 +259,13 @@
                 bind:value={startingPrice}
               />
             </label>
-            <label>
-              <span>Incremento mínimo (R$)</span>
-              <input
-                class="input"
-                type="number"
-                required
-                step="0.01"
-                min={rules.price.min / 100}
-                max={rules.price.max / 100}
-                bind:value={minIncrement}
-              />
-            </label>
+            <!-- RF14: the increment comes from a fixed table, by the current price; the seller doesn't choose it -->
+            <p class="increment muted">
+              {#if startingPrice}
+                Os lances sobem de no mínimo <strong>{formatMoney(calculateMinIncrement(toCents(startingPrice)))}</strong> a este preço.
+              {/if}
+              O incremento é calculado pelo sistema e aumenta conforme o preço sobe.
+            </p>
           </div>
 
           <div class="start" role="radiogroup" aria-label="Início">
@@ -484,6 +477,12 @@
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 12px;
+  }
+
+  .increment {
+    margin: 0;
+    align-self: end;
+    font-size: 13px;
   }
 
   .choice {

@@ -1,7 +1,9 @@
+import { createHmac, randomBytes } from 'node:crypto';
 import {
   auctionStatus,
   calculateMinIncrement,
   canCancel,
+  DELETED_ACCOUNT_NAME,
   maskBidderName,
   minNextBid,
   type AccountDeletionBlockers,
@@ -11,13 +13,12 @@ import {
   type BidFailureCode,
 } from '@auction/shared';
 import { saveStore } from '../persistence';
-import { nextId, store, type AuctionRecord, type BidRecord, type ItemRecord } from '../store';
+import { bidKey, nextId, store, type AuctionRecord, type BidRecord, type ItemRecord } from '../store';
 
 const RECENT_BIDS = 10;
 
 function toAuction(record: AuctionRecord): Auction {
   const item = store.items.get(record.itemId)!;
-  const highestBidder = record.highestBidderId ? store.users.get(record.highestBidderId) : null;
   return {
     id: record.id,
     itemId: item.id,
@@ -28,6 +29,7 @@ function toAuction(record: AuctionRecord): Auction {
     startingPrice: record.startingPrice,
     currentPrice: record.currentPrice,
     minIncrement: calculateMinIncrement(record.currentPrice),
+    minBid: minNextBid(record),
     bidCount: record.bidCount,
     featured: record.featured,
     sellerId: record.sellerId,
@@ -35,23 +37,30 @@ function toAuction(record: AuctionRecord): Auction {
     startsAt: new Date(record.startsAt).toISOString(),
     endsAt: new Date(record.endsAt).toISOString(),
     cancelledAt: record.cancelledAt === null ? null : new Date(record.cancelledAt).toISOString(),
-    highestBidderId: record.highestBidderId,
-    highestBidderName: highestBidder ? maskBidderName(highestBidder.name) : null,
   };
 }
+
+// Bidders are told apart by a tag derived from the auction and the user with a secret key,
+// never by their user id: ids are shared with seller data (where full names are public), so
+// they would reveal who is bidding (RF09). A new key on each start only changes the tags;
+// clients get fresh ones when they rejoin the room after reconnecting.
+const TAG_KEY = randomBytes(32);
+
+export const bidderTag = (auctionId: number, userId: number) =>
+  createHmac('sha256', TAG_KEY).update(`${auctionId}:${userId}`).digest('base64url').slice(0, 16);
 
 /** Scheduled or live (not cancelled, not over). */
 const isActive = (record: AuctionRecord, now: number) => ['scheduled', 'live'].includes(auctionStatus(toAuction(record), now));
 
 function toBid(record: BidRecord): Bid {
-  const user = store.users.get(record.userId);
-  const fullName = user ? user.name : 'Participante';
+  const user = store.users.get(record.userId)!;
   return {
     id: record.id,
     auctionId: record.auctionId,
     amount: record.amount,
-    bidderId: record.userId,
-    bidderName: maskBidderName(fullName),
+    // A deleted account's placeholder is shown as is, not masked into "Conta E."
+    bidderName: user.deletedAt === null ? maskBidderName(user.name) : DELETED_ACCOUNT_NAME,
+    bidderTag: bidderTag(record.auctionId, record.userId),
     createdAt: new Date(record.createdAt).toISOString(),
   };
 }
@@ -91,7 +100,6 @@ export interface NewAuction {
   category: string;
   photos: string[];
   startingPrice: number;
-  minIncrement: number;
   startsAt: number;
   durationMinutes: number;
   featured?: boolean;
@@ -115,7 +123,6 @@ export function createAuction(sellerId: number, input: NewAuction): Auction {
     sellerId,
     startingPrice: input.startingPrice,
     currentPrice: input.startingPrice,
-    minIncrement: input.minIncrement,
     highestBidderId: null,
     bidCount: 0,
     featured: input.featured ?? false,
@@ -180,7 +187,12 @@ export function cancelAuction(auctionId: number, userId: number): Auction {
   }
 
   record.cancelledAt = now;
-  saveStore();
+  try {
+    saveStore();
+  } catch (err) {
+    record.cancelledAt = null; // not on disk, so not cancelled (same as a failed bid)
+    throw err;
+  }
   return toAuction(record);
 }
 
@@ -195,29 +207,20 @@ export class BidError extends Error {
   }
 }
 
-interface IdempotencyEntry {
-  result: { auction: Auction; bid: Bid };
-  createdAt: number;
-}
+/** RF13: minimum time between bid attempts of the same user. */
+const BID_INTERVAL_MS = 500;
 
-const bidIdempotency = new Map<string, IdempotencyEntry>();
-const lastBidByUser = new Map<number, number>();
-
-// Clean up idempotency cache entries older than 10 minutes
-setInterval(() => {
-  const cutoff = Date.now() - 10 * 60 * 1000;
-  for (const [key, entry] of bidIdempotency.entries()) {
-    if (entry.createdAt < cutoff) bidIdempotency.delete(key);
-  }
-}, 5 * 60 * 1000).unref();
+/** Each user's last bid attempt that was processed (RF13). Not saved: it only matters for a moment. */
+const lastAttemptByUser = new Map<number, { at: number; key: string | undefined }>();
 
 const money = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 
 /**
- * Validates and records a bid according to RF09 to RF14.
+ * Validates and records a bid according to RF10 to RF14.
  * It runs synchronously from check to write, so no other bid on the same auction can slip in between (RF11).
- * Idempotency is supported via idempotencyKey (RF12).
- * Rate limit of 500ms per user is enforced without blocking retries or other users (RF13).
+ * The same bid sent again (same idempotencyKey) returns the original bid instead of creating another (RF12).
+ * Every attempt counts toward the 500 ms limit per user, not only accepted bids, except a re-send
+ * of the same bid; one user's attempts never slow down another's (RF13).
  */
 export function placeBid(
   auctionId: number,
@@ -228,29 +231,36 @@ export function placeBid(
   const auction = store.auctions.get(auctionId);
   if (!auction) throw new BidError('Leilão não encontrado', 0, 'INVALID_BID');
 
-  // RF12: Idempotência do lance. Se for o mesmo lance reenviado, retorna o resultado original sem criar segundo lance.
-  const trimmedKey = idempotencyKey?.trim();
-  const cacheKey = trimmedKey ? `${user.id}:${auctionId}:${trimmedKey}` : undefined;
-  if (cacheKey) {
-    const cached = bidIdempotency.get(cacheKey);
-    if (cached) {
-      return { ...cached.result, isReplay: true };
-    }
-  }
+  // RF12: checked before anything else, so a re-sent bid gets its original result even if the
+  // auction has moved on (outbid, ended) since. The key is saved with the bid, so this also
+  // works after a restart.
+  const key = idempotencyKey ? bidKey(user.id, auctionId, idempotencyKey) : undefined;
+  const original = key && store.bidsByKey.get(key);
+  if (original) return { auction: toAuction(auction), bid: toBid(original), isReplay: true };
 
   const now = Date.now();
   const currentAuction = toAuction(auction);
-  const minimum = minNextBid(currentAuction);
+  const minimum = currentAuction.minBid;
 
-  // RF10: Condições estritas no momento do processamento
+  // RF13: checked before the rules, so refused attempts count too. A re-send of the attempt just
+  // made (same key, e.g. a retry after no answer) is let through: it's re-checked below and can't
+  // create a second bid (RF12). Refused-by-limit attempts don't restart the timer.
+  const last = lastAttemptByUser.get(user.id);
+  const resend = idempotencyKey !== undefined && last?.key === idempotencyKey;
+  if (last && !resend && now - last.at < BID_INTERVAL_MS) {
+    throw new BidError('Aguarde um instante antes de enviar outro lance.', minimum, 'RATE_LIMITED');
+  }
+  lastAttemptByUser.set(user.id, { at: now, key: idempotencyKey });
+
+  // RF10: every condition is checked when the bid is processed, not when it was sent
   const status = auctionStatus(currentAuction, now);
-  if (auction.cancelledAt !== null || status === 'cancelled') {
+  if (status === 'cancelled') {
     throw new BidError('Este leilão foi cancelado', minimum, 'NOT_IN_PROGRESS');
   }
   if (status === 'scheduled') {
     throw new BidError('Este leilão ainda não começou', minimum, 'NOT_IN_PROGRESS');
   }
-  if (status === 'sold' || status === 'unsold' || auction.endsAt <= now) {
+  if (status !== 'live') {
     throw new BidError('Este leilão já foi encerrado', minimum, 'NOT_IN_PROGRESS');
   }
   if (auction.sellerId === user.id) {
@@ -260,35 +270,28 @@ export function placeBid(
     throw new BidError('Você já tem o maior lance', minimum, 'ALREADY_LEADER');
   }
 
-  // RF13: Limite de frequência de lances (no mínimo 500 ms entre lances de um mesmo usuário).
-  // Não pune o reenvio legítimo do RF12 (que já passou acima pelo cache) e não bloqueia outros usuários.
-  const lastTime = lastBidByUser.get(user.id);
-  if (lastTime !== undefined && now - lastTime < 500) {
-    throw new BidError('Aguarde um instante antes de enviar outro lance.', minimum, 'RATE_LIMITED');
-  }
-
   if (amount < minimum) {
     throw new BidError(`O lance deve ser de no mínimo ${money.format(minimum / 100)}`, minimum, 'BELOW_MINIMUM');
   }
 
-  // Registra o tempo para rate limit (RF13)
-  lastBidByUser.set(user.id, now);
-
-  // Grava o lance de verdade (RF11: concorrência e persistência garantida antes do broadcast)
-  const bid: BidRecord = { id: nextId('bid'), auctionId, userId: user.id, amount, createdAt: now };
-  store.bidsByAuction.get(auctionId)!.push(bid);
+  const bid: BidRecord = { id: nextId('bid'), auctionId, userId: user.id, amount, createdAt: now, idempotencyKey: idempotencyKey ?? null };
+  const bids = store.bidsByAuction.get(auctionId)!;
+  const before = { currentPrice: auction.currentPrice, highestBidderId: auction.highestBidderId, bidCount: auction.bidCount };
+  bids.push(bid);
+  if (key) store.bidsByKey.set(key, bid);
   auction.currentPrice = amount;
   auction.highestBidderId = user.id;
   auction.bidCount++;
-  saveStore(); // gravado no disco antes de qualquer retorno
-
-  const updatedAuction = toAuction(auction);
-  const updatedBid = toBid(bid);
-  const result = { auction: updatedAuction, bid: updatedBid };
-
-  if (cacheKey) {
-    bidIdempotency.set(cacheKey, { result, createdAt: now });
+  try {
+    saveStore(); // on disk before anyone is told about it (RF11)
+  } catch (err) {
+    // Not on disk means not accepted: undo it, or it would be saved silently with the next change
+    // while the bidder was told it failed and the room never heard of it
+    bids.pop();
+    if (key) store.bidsByKey.delete(key);
+    Object.assign(auction, before);
+    throw err;
   }
 
-  return result;
+  return { auction: toAuction(auction), bid: toBid(bid) };
 }

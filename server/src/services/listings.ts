@@ -45,8 +45,6 @@ export function validateListing(fields: Record<string, string>, files: Buffer[],
 
   const startingPrice = parsePrice(fields.startingPrice, 'preço inicial');
   if (typeof startingPrice === 'string') return fail(startingPrice);
-  const minIncrement = parsePrice(fields.minIncrement, 'incremento mínimo');
-  if (typeof minIncrement === 'string') return fail(minIncrement);
 
   const durationMinutes = Number(fields.durationMinutes);
   if (!Number.isInteger(durationMinutes) || durationMinutes < rules.durationMinutes.min || durationMinutes > rules.durationMinutes.max) {
@@ -77,7 +75,7 @@ export function validateListing(fields: Record<string, string>, files: Buffer[],
 
   return {
     ok: true,
-    value: { title, description, category, startingPrice, minIncrement, startsAt, durationMinutes },
+    value: { title, description, category, startingPrice, startsAt, durationMinutes },
     photos,
   };
 }

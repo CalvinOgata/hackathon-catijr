@@ -40,7 +40,6 @@ export interface AuctionRecord {
   sellerId: number;
   startingPrice: number;
   currentPrice: number;
-  minIncrement: number;
   highestBidderId: number | null;
   bidCount: number;
   featured: boolean;
@@ -57,7 +56,12 @@ export interface BidRecord {
   userId: number;
   amount: number;
   createdAt: number;
+  /** Sent by the client to recognize the same bid sent again (RF12). Kept with the bid, so it works after a restart. */
+  idempotencyKey: string | null;
 }
+
+/** Index key of a bid sent with an idempotency key: the same key only matches the same user and auction. */
+export const bidKey = (userId: number, auctionId: number, idempotencyKey: string) => `${userId}:${auctionId}:${idempotencyKey}`;
 
 export interface SessionRecord {
   id: number;
@@ -85,6 +89,8 @@ export const store = {
   auctions: new Map<number, AuctionRecord>(),
   /** Oldest first. */
   bidsByAuction: new Map<number, BidRecord[]>(),
+  /** See `bidKey`. */
+  bidsByKey: new Map<string, BidRecord>(),
   sessions: new Map<number, SessionRecord>(),
   sessionIdsByTokenHash: new Map<string, number>(),
   /** Keyed by normalized email, whether or not an account exists for it. */

@@ -5,6 +5,7 @@
   import { auth } from '#lib/auth.svelte.ts';
   import AuctionCard from '#lib/components/AuctionCard.svelte';
   import AuctionHero from '#lib/components/AuctionHero.svelte';
+  import { serverNow } from '#lib/clock.svelte.ts';
   import { AuctionRoom } from '#lib/room.svelte.ts';
   import { socket } from '#lib/socket.svelte.ts';
 
@@ -21,7 +22,7 @@
 
   const featured = $derived.by(() => {
     // Only auctions that can still be followed are featured; checked when the list loads or changes
-    const now = Date.now();
+    const now = serverNow();
     const active = auctions.filter((a) => ['scheduled', 'live'].includes(auctionStatus(a, now)));
     const list = active.filter((a) => a.featured);
     return list.length ? list : active.slice(0, 1);

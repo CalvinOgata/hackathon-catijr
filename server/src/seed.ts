@@ -19,30 +19,30 @@ export const DEMO_BUYERS = [
 // Placeholder catalog so the UI has something to show in development.
 // Prices are in reais here and converted to cents on insert.
 // `startsIn`/`endsIn` are hours from now: a negative start means it's already running.
-const AUCTIONS: { title: string; category: Category; price: number; increment: number; startsIn?: number; endsIn: number; featured: boolean; description: string }[] = [
-  { title: 'Rolex Submariner 1968, mostrador original', category: 'Relógios', price: 85_000, increment: 500, endsIn: 26, featured: true,
+const AUCTIONS: { title: string; category: Category; price: number; startsIn?: number; endsIn: number; featured: boolean; description: string }[] = [
+  { title: 'Rolex Submariner 1968, mostrador original', category: 'Relógios', price: 85_000, endsIn: 26, featured: true,
     description: 'Ref. 5513 em estado notável, com caixa e comprovantes de revisão de 2019. Um dos relógios de mergulho vintage mais desejados.' },
-  { title: 'Pintura a óleo original "Ipanema ao Entardecer"', category: 'Arte', price: 12_000, increment: 250, endsIn: 50, featured: true,
+  { title: 'Pintura a óleo original "Ipanema ao Entardecer"', category: 'Arte', price: 12_000, endsIn: 50, featured: true,
     description: 'Óleo sobre tela de 120 × 80 cm de um artista contemporâneo carioca. Assinada e datada, com certificado de autenticidade.' },
-  { title: 'Fusca 1972 totalmente restaurado', category: 'Veículos', price: 38_000, increment: 1_000, endsIn: 8, featured: true,
+  { title: 'Fusca 1972 totalmente restaurado', category: 'Veículos', price: 38_000, endsIn: 8, featured: true,
     description: 'Restauração completa concluída em 2023. Motor 1300 original, estofamento novo e documentação em dia.' },
-  { title: 'Leica M6 com Summicron 50mm f/2', category: 'Eletrônicos', price: 21_000, increment: 200, endsIn: 0.4, featured: false,
+  { title: 'Leica M6 com Summicron 50mm f/2', category: 'Eletrônicos', price: 21_000, endsIn: 0.4, featured: false,
     description: 'Câmera telemétrica clássica de filme, revisada recentemente. Fotômetro funcionando perfeitamente, leve desgaste na tampa superior.' },
-  { title: 'Fender Stratocaster 1979, sunburst', category: 'Música', price: 16_500, increment: 250, endsIn: 72, featured: false,
+  { title: 'Fender Stratocaster 1979, sunburst', category: 'Música', price: 16_500, endsIn: 72, featured: false,
     description: 'Eletrônica e captadores originais. Toca lindamente e acompanha o case rígido original.' },
-  { title: 'MacBook Pro 16" M3 Max, lacrado', category: 'Eletrônicos', price: 18_000, increment: 100, endsIn: 5, featured: false,
+  { title: 'MacBook Pro 16" M3 Max, lacrado', category: 'Eletrônicos', price: 18_000, endsIn: 5, featured: false,
     description: '48 GB de RAM, SSD de 1 TB, preto-espacial. Lacrado de fábrica, com nota fiscal e garantia completa.' },
-  { title: '"Dom Casmurro", primeira edição (1899)', category: 'Colecionáveis', price: 45_000, increment: 1_000, endsIn: 96, featured: false,
+  { title: '"Dom Casmurro", primeira edição (1899)', category: 'Colecionáveis', price: 45_000, endsIn: 96, featured: false,
     description: 'Rara primeira edição publicada pela H. Garnier. Encadernação original com desgaste esperado, miolo completo.' },
-  { title: 'Air Jordan 1 "Chicago" 1985, tamanho 42', category: 'Moda', price: 30_000, increment: 500, endsIn: 14, featured: false,
+  { title: 'Air Jordan 1 "Chicago" 1985, tamanho 42', category: 'Moda', price: 30_000, endsIn: 14, featured: false,
     description: 'Par original de 1985, nunca usado, com a caixa original. Autenticado por um serviço independente.' },
-  { title: 'Poltrona Eames com banqueta', category: 'Design', price: 27_000, increment: 500, endsIn: 33, featured: false,
+  { title: 'Poltrona Eames com banqueta', category: 'Design', price: 27_000, endsIn: 33, featured: false,
     description: 'Produção licenciada Herman Miller em nogueira e couro preto. Pátina leve, estrutura impecável.' },
-  { title: 'Charizard Pokémon Base Set, PSA 9', category: 'Colecionáveis', price: 22_000, increment: 250, endsIn: 2, featured: false,
+  { title: 'Charizard Pokémon Base Set, PSA 9', category: 'Colecionáveis', price: 22_000, endsIn: 2, featured: false,
     description: 'Edição Unlimited, nota Mint 9. Case limpo e centralização excelente.' },
-  { title: 'Vitrola Gradiente anos 70, funcionando', category: 'Música', price: 1_800, increment: 50, startsIn: 0.25, endsIn: 3, featured: false,
+  { title: 'Vitrola Gradiente anos 70, funcionando', category: 'Música', price: 1_800, startsIn: 0.25, endsIn: 3, featured: false,
     description: 'Toca-discos com receiver embutido, revisado. Acompanha tampa de acrílico original e manual.' },
-  { title: 'Mesa de jantar em jacarandá entalhada à mão', category: 'Design', price: 9_500, increment: 100, endsIn: 40, featured: false,
+  { title: 'Mesa de jantar em jacarandá entalhada à mão', category: 'Design', price: 9_500, endsIn: 40, featured: false,
     description: 'Para oito lugares. Feita nos anos 1960 por uma oficina mineira, com madeira de demolição certificada.' },
 ];
 
@@ -64,7 +64,6 @@ export async function seed() {
       // Placeholder pictures; real auctions upload their own (at least 3, RF05)
       photos: [1, 2, 3].map((n) => `https://picsum.photos/seed/auction-${i + 1}-${n}/960/640`),
       startingPrice: auction.price * 100,
-      minIncrement: auction.increment * 100,
       startsAt,
       durationMinutes: Math.round((Date.now() + auction.endsIn * HOUR - startsAt) / 60_000),
       featured: auction.featured,

@@ -1,15 +1,16 @@
 <script lang="ts">
-  import { calculateMinIncrement, minNextBid, type Auction } from '@auction/shared';
-  import { auth } from '#lib/auth.svelte.ts';
+  import { SESSION_INVALID, type Auction } from '@auction/shared';
   import { clock } from '#lib/clock.svelte.ts';
   import { formatMoney } from '#lib/format.ts';
   import { socket } from '#lib/socket.svelte.ts';
 
-  let { auction }: { auction: Auction } = $props();
+  /** `leading`: the logged-in user has the highest bid (known from the room). */
+  let { auction, leading }: { auction: Auction; leading: boolean } = $props();
 
-  const minimum = $derived(minNextBid(auction));
+  // Computed by the server (RF14); this form only displays it
+  const minimum = $derived(auction.minBid);
+  const increment = $derived(auction.minIncrement);
   const ended = $derived(Date.parse(auction.endsAt) <= clock.now);
-  const isLeader = $derived(auth.user?.id !== undefined && auth.user?.id === auction.highestBidderId);
 
   /** In reais, as typed by the user. */
   let amount = $state<number | null>(null);
@@ -22,38 +23,75 @@
     if (amount === null || amount * 100 < minimum) amount = minimum / 100;
   });
 
-  const increment = $derived(calculateMinIncrement(auction.currentPrice));
   const quickIncrements = $derived([1, 5, 10].map((times) => times * increment));
 
-  function generateIdempotencyKey(): string {
-    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-      return crypto.randomUUID();
+  // RF12: each bid intent (auction + amount) gets one key. When a send gets no definitive
+  // answer (timeout, dropped connection, server error, expired session), sending the same
+  // amount again reuses the key, so if the first one did go through the server returns it
+  // instead of creating a second bid. It's kept in sessionStorage to survive logging in again.
+  type Pending = { key: string; amount: number };
+  const storageKey = () => `bid-pending:${auction.id}`;
+
+  function newKey(): string {
+    if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+    // randomUUID only exists on HTTPS or localhost; getRandomValues works everywhere
+    return Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  function readPending(): Pending | null {
+    try {
+      return JSON.parse(sessionStorage.getItem(storageKey()) ?? 'null');
+    } catch {
+      return null;
     }
-    return `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+  }
+
+  function writePending(pending: Pending | null) {
+    try {
+      if (pending) sessionStorage.setItem(storageKey(), JSON.stringify(pending));
+      else sessionStorage.removeItem(storageKey());
+    } catch {
+      // Storage unavailable (private mode): retries still work while the page stays open
+    }
+  }
+
+  let pending: Pending | null = readPending();
+
+  function keyFor(cents: number): string {
+    if (pending?.amount !== cents) {
+      pending = { key: newKey(), amount: cents };
+      writePending(pending);
+    }
+    return pending.key;
+  }
+
+  function settle() {
+    pending = null;
+    writePending(null);
   }
 
   async function submit(event: SubmitEvent) {
     event.preventDefault();
-    if (amount === null || submitting || cooldown || isLeader) return;
+    if (amount === null || submitting || cooldown || leading) return;
 
     submitting = true;
     feedback = null;
-    const idempotencyKey = generateIdempotencyKey();
+    const cents = Math.round(amount * 100);
 
     try {
       const result = await socket.timeout(5000).emitWithAck('bid:place', {
         auctionId: auction.id,
-        amount: Math.round(amount * 100),
-        idempotencyKey,
+        amount: cents,
+        idempotencyKey: keyFor(cents),
       });
 
       if (result.ok) {
+        settle();
         feedback = { kind: 'success', text: 'Lance registrado! Você está na liderança.' };
-        if (result.auction) {
-          amount = minNextBid(result.auction) / 100;
-        }
       } else {
-        // RF10: Todo lance recusado informa ao autor o motivo e o lance mínimo atual
+        // A refusal is definitive; a server error or an expired session isn't (the bid may be retried)
+        if (result.code && result.code !== SESSION_INVALID) settle();
+        // RF10: every refusal tells the reason and the current minimum
         let msg = result.error;
         if (result.currentMinBid && result.currentMinBid > 0) {
           amount = result.currentMinBid / 100;
@@ -65,7 +103,7 @@
       feedback = { kind: 'error', text: 'O servidor não respondeu. Tente novamente.' };
     } finally {
       submitting = false;
-      // RF13: Cooldown visual suave de 500ms para evitar rajadas
+      // RF13: matches the server's 500 ms between bids, so a double click doesn't get refused
       cooldown = true;
       setTimeout(() => (cooldown = false), 500);
     }
@@ -74,7 +112,7 @@
 
 {#if ended}
   <p class="closed">Este leilão foi encerrado.</p>
-{:else if isLeader}
+{:else if leading}
   <div class="leader-box" role="status">
     <div class="leader-header">
       <span class="leader-star">⭐</span>
