@@ -32,6 +32,17 @@
   const scheduled = $derived(status === 'scheduled');
   const over = $derived(status !== 'scheduled' && status !== 'live');
   const isWinner = $derived(status === 'sold' && isLeader);
+  /** RF25: true when the connected user is in the room but only as a spectator. */
+  const isSpectator = $derived(room?.joined === true && room?.mode === 'spectator');
+
+  let upgrading = $state(false);
+
+  async function handleUpgrade() {
+    if (!room || upgrading) return;
+    upgrading = true;
+    await room.upgrade();
+    upgrading = false;
+  }
 
   // Gallery: which photo is shown large (reset when showing another auction)
   let selected = $state(0);
@@ -154,6 +165,15 @@
     {:else if !room?.joined}
       <p class="muted small">Entrando na sala do leilão…</p>
     {:else}
+      <!-- RF25: presence badge -->
+      <div class="presence-badge">
+        <span class="presence-icon">👥</span>
+        <span>
+          {room.participants} {room.participants === 1 ? 'participante' : 'participantes'}
+          · {room.spectators} {room.spectators === 1 ? 'espectador' : 'espectadores'}
+        </span>
+      </div>
+
       {#if isSeller}
         {#if !over}
           <p class="note">Este leilão é seu. Você não pode dar lances no próprio leilão.</p>
@@ -164,9 +184,20 @@
       {:else if scheduled}
         <p class="muted small">Os lances abrem quando o leilão começar.</p>
       {:else}
-        {#key auction.id}
-          <BidForm {auction} />
-        {/key}
+        <!-- RF25: spectator upgrade prompt -->
+        {#if isSpectator && status === 'live'}
+          <div class="spectator-gate">
+            <p class="small"><strong>Você está assistindo como espectador.</strong></p>
+            <p class="muted small">Clique abaixo para participar e dar lances.</p>
+            <button class="btn btn-primary full" onclick={handleUpgrade} disabled={upgrading}>
+              {upgrading ? 'Entrando…' : '🎯 Participar do leilão'}
+            </button>
+          </div>
+        {:else}
+          {#key auction.id}
+            <BidForm {auction} {room} />
+          {/key}
+        {/if}
       {/if}
 
       <section class="history">
@@ -496,6 +527,37 @@
   .amount {
     font-weight: 600;
     font-variant-numeric: tabular-nums;
+  }
+
+  .spectator-gate {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 16px;
+    border: 1px dashed var(--accent);
+    border-radius: 12px;
+    background: var(--accent-soft);
+  }
+
+  .spectator-gate .small {
+    margin-bottom: 4px;
+  }
+
+  .presence-badge {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 13px;
+    color: var(--muted);
+    font-weight: 500;
+  }
+
+  .presence-icon {
+    font-size: 15px;
   }
 
   @media (max-width: 900px) {

@@ -191,7 +191,26 @@ export type BidFailure = {
 
 export type BidResult = { ok: true; auction?: Auction; bid?: Bid } | BidFailure;
 
-export type JoinRoomResult = { ok: true; auction: AuctionDetail } | Failure;
+/** RF25: whether a user joined a room as a bidder (participant) or a viewer (spectator). */
+export type RoomMode = 'participant' | 'spectator';
+
+/**
+ * Returned by room:join and room:upgrade.
+ * Includes `mode` so the client knows which role the server assigned (RF25).
+ */
+export type JoinRoomResult = { ok: true; auction: AuctionDetail; mode: RoomMode } | Failure;
+
+/**
+ * Live headcount emitted to all room members whenever someone enters, leaves,
+ * or upgrades from spectator to participant (RF25).
+ */
+export interface RoomPresence {
+  auctionId: number;
+  /** Number of connections currently in the participant room (can place bids). */
+  participants: number;
+  /** Number of connections currently in the spectator room (view only). */
+  spectators: number;
+}
 
 export interface ServerToClientEvents {
   /** Public: a new listing was published. */
@@ -202,10 +221,16 @@ export interface ServerToClientEvents {
   'room:bid': (payload: { auction: Auction; bid: Bid }) => void;
   /** This connection's session ended (expired or logged out); it was removed from every room. */
   'session:expired': () => void;
+  /** Sent to everyone in an auction's room whenever the headcount changes (RF25). */
+  'room:presence': (payload: RoomPresence) => void;
 }
 
 export interface ClientToServerEvents {
-  'room:join': (auctionId: number, ack: (result: JoinRoomResult) => void) => void;
+  /** RF04 / RF25: join as spectator (default) or participant. Login is required either way. */
+  'room:join': (auctionId: number, mode: RoomMode, ack: (result: JoinRoomResult) => void) => void;
+  /** RF25: promote from spectator to participant without leaving the room. */
+  'room:upgrade': (auctionId: number, ack: (result: JoinRoomResult) => void) => void;
+  /** RF25: leave both the participant and spectator rooms for this auction. */
   'room:leave': (auctionId: number) => void;
   'bid:place': (
     payload: { auctionId: number; amount: number; idempotencyKey?: string },

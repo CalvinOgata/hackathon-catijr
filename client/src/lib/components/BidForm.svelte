@@ -3,9 +3,10 @@
   import { auth } from '#lib/auth.svelte.ts';
   import { clock } from '#lib/clock.svelte.ts';
   import { formatMoney } from '#lib/format.ts';
+  import type { AuctionRoom } from '#lib/room.svelte.ts';
   import { socket } from '#lib/socket.svelte.ts';
 
-  let { auction }: { auction: Auction } = $props();
+  let { auction, room }: { auction: Auction; room: AuctionRoom | null } = $props();
 
   const minimum = $derived(minNextBid(auction));
   const ended = $derived(Date.parse(auction.endsAt) <= clock.now);
@@ -38,6 +39,17 @@
 
     submitting = true;
     feedback = null;
+
+    // RF25: upgrade from spectator to participant before placing a bid
+    if (room && room.mode === 'spectator') {
+      const upgraded = await room.upgrade();
+      if (!upgraded) {
+        feedback = { kind: 'error', text: room.error ?? 'Não foi possível entrar como participante. Tente novamente.' };
+        submitting = false;
+        return;
+      }
+    }
+
     const idempotencyKey = generateIdempotencyKey();
 
     try {

@@ -1,4 +1,4 @@
-import { minNextBid, SESSION_INVALID, type ClientToServerEvents, type Failure, type ServerToClientEvents } from '@auction/shared';
+import { minNextBid, SESSION_INVALID, type ClientToServerEvents, type Failure, type RoomMode, type ServerToClientEvents } from '@auction/shared';
 import type { FastifyInstance } from 'fastify';
 import { Server, type Socket } from 'socket.io';
 import { config } from './config';
@@ -22,32 +22,58 @@ declare module 'fastify' {
 
 const SWEEP_INTERVAL_MS = 60 * 1000;
 
+/** Main participant room: guards bid placement. */
 const roomName = (auctionId: number) => `auction:${auctionId}`;
+/** Spectator room: receives bids and presence, but cannot place bids. */
+const spectatorRoom = (auctionId: number) => `auction:${auctionId}:spectators`;
 const sessionRoom = (sessionId: number) => `session:${sessionId}`;
 
 const sessionFailure: Failure = { ok: false, error: 'Sua sessão expirou. Entre novamente.', code: SESSION_INVALID };
 
 /** Downgrades a connection to guest: it leaves every room and is told its session ended. */
-function endSession(socket: AppSocket) {
-  socket.data.sessionId = undefined;
+function endSession(socket: AppSocket, io: IO) {
+  // Collect auction IDs the socket was in so we can broadcast updated presence after leaving
+  const auctionIds = new Set<number>();
   for (const room of socket.rooms) {
+    const participantMatch = room.match(/^auction:(\d+)$/);
+    const spectatorMatch = room.match(/^auction:(\d+):spectators$/);
+    if (participantMatch) auctionIds.add(Number(participantMatch[1]));
+    if (spectatorMatch) auctionIds.add(Number(spectatorMatch[1]));
     if (room !== socket.id) socket.leave(room);
   }
+  socket.data.sessionId = undefined;
   socket.emit('session:expired');
+  for (const auctionId of auctionIds) broadcastPresence(io, auctionId);
 }
 
 /**
  * Every protected action calls this (RF02): the session is re-checked against the
  * database each time, so expiry and logout take effect immediately, and the use renews it.
+ * Returns null (without calling endSession) so callers can respond with sessionFailure first.
  */
 function requireSession(socket: AppSocket): Session | null {
   if (socket.data.sessionId === undefined) return null;
   const session = useSessionById(socket.data.sessionId);
-  if (!session) endSession(socket);
+  if (!session) return null; // caller must call endSession(socket, io) to clean up rooms
   return session;
 }
 
 const isAuctionId = (value: unknown): value is number => Number.isInteger(value) && (value as number) > 0;
+
+/** Counts participants and spectators for an auction room. */
+function roomPresenceCounts(io: IO, auctionId: number): { participants: number; spectators: number } {
+  const participants = io.sockets.adapter.rooms.get(roomName(auctionId))?.size ?? 0;
+  const spectators = io.sockets.adapter.rooms.get(spectatorRoom(auctionId))?.size ?? 0;
+  return { participants, spectators };
+}
+
+/** Broadcasts current headcount to everyone in the auction's rooms (RF25). */
+function broadcastPresence(io: IO, auctionId: number) {
+  const { participants, spectators } = roomPresenceCounts(io, auctionId);
+  const payload = { auctionId, participants, spectators };
+  // Emit to both rooms (participants room + spectators room)
+  io.to(roomName(auctionId)).to(spectatorRoom(auctionId)).emit('room:presence', payload);
+}
 
 export function registerSocket(app: FastifyInstance) {
   const io: IO = new Server(app.server, { cors: { origin: config.corsOrigin } });
@@ -64,28 +90,69 @@ export function registerSocket(app: FastifyInstance) {
   });
 
   io.on('connection', (socket) => {
-    // Entering an auction room requires login (RF04)
-    socket.on('room:join', (auctionId, ack) => {
+    // RF04 / RF25: entering an auction room requires login; mode selects participant or spectator.
+    socket.on('room:join', (auctionId, mode, ack) => {
       if (typeof ack !== 'function') return;
-      if (!requireSession(socket)) return ack(sessionFailure);
+      const session = requireSession(socket);
+      if (!session) {
+        endSession(socket, io);
+        return ack(sessionFailure);
+      }
       if (!isAuctionId(auctionId)) return ack({ ok: false, error: 'Leilão inválido' });
 
       const auction = getAuctionDetail(auctionId);
       if (!auction) return ack({ ok: false, error: 'Leilão não encontrado' });
 
-      socket.join(roomName(auctionId));
-      ack({ ok: true, auction });
+      // Validate mode; default to spectator for unknown values
+      const resolvedMode: RoomMode = mode === 'participant' ? 'participant' : 'spectator';
+
+      if (resolvedMode === 'participant') {
+        socket.join(roomName(auctionId));
+      } else {
+        socket.join(spectatorRoom(auctionId));
+      }
+
+      broadcastPresence(io, auctionId);
+      ack({ ok: true, auction, mode: resolvedMode });
     });
 
+    // RF25: promote a spectator to participant without disconnecting.
+    socket.on('room:upgrade', (auctionId, ack) => {
+      if (typeof ack !== 'function') return;
+      const session = requireSession(socket);
+      if (!session) {
+        endSession(socket, io);
+        return ack(sessionFailure);
+      }
+      if (!isAuctionId(auctionId)) return ack({ ok: false, error: 'Leilão inválido' });
+
+      const auction = getAuctionDetail(auctionId);
+      if (!auction) return ack({ ok: false, error: 'Leilão não encontrado' });
+
+      // Leave spectator room and join participant room
+      socket.leave(spectatorRoom(auctionId));
+      socket.join(roomName(auctionId));
+
+      broadcastPresence(io, auctionId);
+      ack({ ok: true, auction, mode: 'participant' });
+    });
+
+    // RF25: on explicit leave, clean up both rooms (participant and spectator) and update presence.
     socket.on('room:leave', (auctionId) => {
-      if (isAuctionId(auctionId)) socket.leave(roomName(auctionId));
+      if (!isAuctionId(auctionId)) return;
+      socket.leave(roomName(auctionId));
+      socket.leave(spectatorRoom(auctionId));
+      broadcastPresence(io, auctionId);
     });
 
     socket.on('bid:place', (payload, ack) => {
       if (typeof ack !== 'function') return;
 
       const session = requireSession(socket);
-      if (!session) return ack(sessionFailure);
+      if (!session) {
+        endSession(socket, io);
+        return ack(sessionFailure);
+      }
 
       const { auctionId, amount, idempotencyKey } = payload ?? {};
       if (!isAuctionId(auctionId) || !Number.isInteger(amount) || amount <= 0) {
@@ -100,7 +167,8 @@ export function registerSocket(app: FastifyInstance) {
         // Listings are public, but who bid is only shared with the room (RF09, RF11)
         if (!result.isReplay) {
           io.emit('auction:updated', result.auction);
-          io.to(roomName(auctionId)).emit('room:bid', result);
+          // Broadcast bids to both participant and spectator rooms
+          io.to(roomName(auctionId)).to(spectatorRoom(auctionId)).emit('room:bid', result);
         }
         ack({ ok: true, auction: result.auction, bid: result.bid });
       } catch (err) {
@@ -125,14 +193,14 @@ export function registerSocket(app: FastifyInstance) {
     deleteExpiredSessions();
     for (const socket of io.of('/').sockets.values()) {
       const { sessionId } = socket.data;
-      if (sessionId !== undefined && !isSessionActive(sessionId)) endSession(socket);
+      if (sessionId !== undefined && !isSessionActive(sessionId)) endSession(socket, io);
     }
   }, SWEEP_INTERVAL_MS);
 
   app.decorate('io', io);
   app.decorate('endSocketSession', (sessionId: number) => {
     for (const socket of io.of('/').sockets.values()) {
-      if (socket.data.sessionId === sessionId) endSession(socket);
+      if (socket.data.sessionId === sessionId) endSession(socket, io);
     }
   });
 
