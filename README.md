@@ -66,6 +66,7 @@ The Makefile only wraps npm scripts, so `npm run dev`, `npm run build`, etc. sti
 | **RF12** · Bid idempotency. | The client creates one `idempotencyKey` per bid intent (auction + amount) and reuses it when it re-sends that bid after getting no definitive answer (timeout, dropped connection, server error, expired session; the key is kept in `sessionStorage`, so it survives logging in again). The key is saved with the bid in `store.json`, so a re-sent bid returns the original one, even after the auction moved on or the server restarted, and never creates a second bid. |
 | **RF13** · Bid rate limiting. | At least 500 ms between bid attempts of the same user. Every attempt counts, refused ones too, so a user can't flood the server with bids that fail. A re-send of the same bid (RF12, same key) is never rate limited, attempts refused by the limit don't restart the timer, and each user has their own timer, so nobody slows down anyone else. The bid button also waits 500 ms after each attempt. |
 | **RF14** · Dynamic minimum bid calculation. | The reference table: the increment depends only on the current price (R$ 1,00 up to R$ 99,99 … R$ 500,00 from R$ 25.000,00); the first bid may equal the starting price. Sellers don't choose an increment. The server computes the minimum next bid and sends it with every auction (`minBid`, `minIncrement`); the screens only display it. |
+| **RF25** · Spectators and headcount. | Everyone enters a room as a spectator, the seller included: spectators see everything live but can't bid. "Participar do leilão" makes them a participant without leaving the room (`room:upgrade`); the seller can only watch their own auction. The room shows how many participants and spectators are in it, counting people rather than connections (someone watching in one tab and bidding in another is a participant) and updating when anyone joins, upgrades, leaves, closes the tab or logs out. A participant who reconnects comes back as a participant. |
 
 **Team decision (RF02):** sessions **renew with use**. A session ends after **2 hours without any authenticated action**,
 and in any case **7 days after login**. Both are configurable in `server/.env` (`SESSION_IDLE_MINUTES`, `SESSION_MAX_DAYS`).
@@ -128,12 +129,14 @@ Anyone can connect (to receive public listing updates). Send the session token i
 | Direction            | Event             | Payload                                                    |
 | -------------------- | ----------------- | ---------------------------------------------------------- |
 | client → server      | `clock:sync`      | ack → the server's time (epoch ms); anyone. The client measures the difference to its own clock on every connect and every 10 minutes, so countdowns and statuses follow the server's clock (RF16) even when the browser's is wrong |
-| client → server      | `room:join`       | `auctionId`, ack → `{ ok, auction, viewerTag }` with recent bids; `viewerTag` is your `bidderTag` in this auction (session required) |
-| client → server      | `room:leave`      | `auctionId`                                                |
+| client → server      | `room:join`       | `auctionId, mode` (`'participant'` or `'spectator'`), ack → `{ ok, auction, mode, viewerTag }` with recent bids; `mode` is the role given (a seller always watches their own auction), `viewerTag` is your `bidderTag` in this auction (session required). Joining again moves the connection to the new mode's room |
+| client → server      | `room:upgrade`    | `auctionId`, ack like `room:join`: a spectator becomes a participant without leaving the room (RF25) |
+| client → server      | `room:leave`      | `auctionId` (whichever the mode)                            |
 | client → server      | `bid:place`       | `{ auctionId, amount, idempotencyKey? }`, ack → `{ ok: true, auction, bid }` or `{ ok: false, error, code?, currentMinBid? }` (session + room required) |
 | server → everyone    | `auction:created` | new listing                                                |
 | server → everyone    | `auction:updated` | listing after a bid (price, bid count — no bidder)         |
-| server → room        | `room:bid`        | `{ auction, bid }` with the bidder's masked name and tag   |
+| server → room        | `room:bid`        | `{ auction, bid }` with the bidder's masked name and tag, to participants and spectators |
+| server → room        | `room:presence`   | `{ auctionId, participants, spectators }`: people (not tabs) in the room, sent whenever someone joins, upgrades, leaves, disconnects or logs out (RF25) |
 | server → connection  | `session:expired` | the session ended; the connection was removed from all rooms |
 
 The event types live in `shared/src/index.ts`, so both ends are type-checked against the same contract.
