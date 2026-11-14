@@ -140,6 +140,8 @@ When the server ends a session, the client logs out and shows a "session expired
 **Demo data** (RNF04), created on the first start (and again after `make reset-data`): the accounts below and
 16 auctions in every state: live with and without bids, scheduled, sold (with winners), ended without bids and
 cancelled. Past bids are placed through the normal bid rules, as if at their time, so the sample data can't break them.
+Their photos are illustrations shipped in `server/seed-photos/` and copied into the data folder like uploads, so the demo
+depends on nothing outside the VM (RNF01). Replace those files with real photos (same names) to change them.
 
 **Demo accounts** (RNF04: ao menos 1 comitente e 3 compradores com dados de demonstração):
 - **Comitente / Seller:** `demo@arremate.dev` / `Demo@12345` (possui os leilões de exemplo; acesse para ver a visão de vendedor)

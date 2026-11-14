@@ -1,9 +1,17 @@
+import { readFileSync } from 'node:fs';
 import type { Category } from '@auction/shared';
 import { cancelAuction, createAuction, placeBid } from './services/auctions';
+import { savePhotos } from './services/photos';
 import { hashPassword } from './services/passwords';
 import { createUser } from './services/users';
 
 const HOUR = 60 * 60 * 1000;
+
+// Sample pictures shipped with the code (server/seed-photos/<auction>-<1..3>.jpg). They are stored
+// like uploads, so the demo depends on nothing outside the VM (RNF01).
+const SEED_PHOTOS = new URL('../seed-photos/', import.meta.url);
+const samplePhotos = (n: number) =>
+  savePhotos([1, 2, 3].map((k) => ({ data: readFileSync(new URL(`${n}-${k}.jpg`, SEED_PHOTOS)), type: 'image/jpeg' as const })));
 
 // A regular user that owns the sample listings (there are no admins, RF03).
 // Log in with it to see the seller's view of an auction.
@@ -90,8 +98,8 @@ export async function seed() {
       title: auction.title,
       description: auction.description,
       category: auction.category,
-      // Placeholder pictures; real auctions upload their own (at least 3, RF05)
-      photos: [1, 2, 3].map((n) => `https://picsum.photos/seed/auction-${i + 1}-${n}/960/640`),
+      // Illustrations; real auctions upload their own (at least 3, RF05)
+      photos: samplePhotos(i + 1),
       startingPrice: auction.price * 100,
       startsAt,
       durationMinutes: Math.round((now + auction.endsIn * HOUR - startsAt) / 60_000),

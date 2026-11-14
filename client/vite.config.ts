@@ -8,7 +8,7 @@ export default defineConfig({
   plugins: [
     sveltekit({
       // Client-only SPA: the Fastify server is the only backend
-      adapter: adapter({ fallback: 'index.html' }),
+      adapter: adapter({ fallback: 'index.html', precompress: true }),
     }),
   ],
   server: {

@@ -43,6 +43,7 @@ export async function buildApp() {
   if (existsSync(join(config.clientDir, 'index.html'))) {
     await app.register(fastifyStatic, {
       root: config.clientDir,
+      preCompressed: true, // the build ships .br/.gz copies of each file
       setHeaders: (res, path) => {
         // File names under _app/immutable change with their content; the page itself must not be cached
         res.header('cache-control', path.includes('/_app/immutable/') ? 'public, max-age=31536000, immutable' : 'no-cache');

@@ -1,4 +1,5 @@
 import type { Auction, Bid, RoomMode, RoomPresence } from '@auction/shared';
+import { untrack } from 'svelte';
 import { socket } from './socket.svelte.ts';
 
 // Several components may watch the same room (e.g. while navigating from the home
@@ -33,6 +34,8 @@ export class AuctionRoom {
   spectators = $state(0);
 
   #left = false;
+  /** Only the latest join attempt counts: an older one may time out after a newer one worked. */
+  #attempt = 0;
 
   constructor(auctionId: number) {
     this.auctionId = auctionId;
@@ -41,7 +44,9 @@ export class AuctionRoom {
     socket.on('room:bid', this.#onBid);
     socket.on('auction:updated', this.#onUpdated); // status changes without a bid, e.g. cancelled (RF08)
     socket.on('room:presence', this.#onPresence); // RF25: headcount updates
-    if (socket.connected) this.#join();
+    // Rooms are usually created inside an $effect: joining reads shared state (`modes`), which
+    // must not become a dependency of that effect, or every answer would recreate the room.
+    if (socket.connected) untrack(this.#join);
   }
 
   leave() {
@@ -92,10 +97,11 @@ export class AuctionRoom {
   }
 
   #join = async () => {
+    const attempt = ++this.#attempt;
     try {
       // RF25: spectator at first; after reconnecting, the role this connection had
       const result = await socket.timeout(5000).emitWithAck('room:join', this.auctionId, this.mode);
-      if (this.#left) return;
+      if (this.#left || attempt !== this.#attempt) return;
       if (result.ok) {
         const { recentBids, ...auction } = result.auction;
         this.auction = auction;
@@ -109,7 +115,7 @@ export class AuctionRoom {
         this.error = result.error;
       }
     } catch {
-      if (!this.#left) this.error = 'Não foi possível acessar a sala do leilão. Tentaremos de novo quando a conexão voltar…';
+      if (!this.#left && attempt === this.#attempt) this.error = 'Não foi possível acessar a sala do leilão. Tentaremos de novo quando a conexão voltar…';
     }
   };
 
