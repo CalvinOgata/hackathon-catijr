@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { AUCTION_STATUS_LABELS, auctionStatus, type Auction } from '@auction/shared';
+  import { AUCTION_STATUS_LABELS, auctionStatus, calculateMinIncrement, minNextBid, type Auction } from '@auction/shared';
   import type { Snippet } from 'svelte';
   import { page } from '$app/state';
   import { auth } from '#lib/auth.svelte.ts';
@@ -26,10 +26,12 @@
 
   const auction = $derived(room?.auction?.id === listing.id ? room.auction : listing);
   const isSeller = $derived(auth.user?.id === auction.sellerId);
+  const isLeader = $derived(auth.user?.id !== undefined && auth.user?.id === auction.highestBidderId);
   const here = $derived(encodeURIComponent(page.url.pathname + page.url.search));
   const status = $derived(auctionStatus(auction, clock.now));
   const scheduled = $derived(status === 'scheduled');
   const over = $derived(status !== 'scheduled' && status !== 'live');
+  const isWinner = $derived(status === 'sold' && isLeader);
 
   // Gallery: which photo is shown large (reset when showing another auction)
   let selected = $state(0);
@@ -80,6 +82,13 @@
         {/key}
         <span class="muted small">{auction.bidCount} {auction.bidCount === 1 ? 'lance' : 'lances'}</span>
       </div>
+      {#if !over}
+        <div class="stats-min">
+          <span class="label">Mín. próximo lance</span>
+          <strong class="min-price">{formatMoney(minNextBid(auction))}</strong>
+          <span class="muted small">+{formatMoney(calculateMinIncrement(auction.currentPrice))} mín.</span>
+        </div>
+      {/if}
       <div class="ends">
         {#if over}
           <span class="label">Situação</span>
@@ -90,6 +99,37 @@
         {/if}
       </div>
     </div>
+
+    {#if status === 'sold'}
+      <div class="outcome outcome-sold" in:flash>
+        <span class="outcome-trophy">🏆</span>
+        <div>
+          <strong>Leilão Vendido</strong>
+          <p class="small">Vencedor: <strong>{isWinner ? 'Você!' : auction.highestBidderName}</strong> por <strong>{formatMoney(auction.currentPrice)}</strong></p>
+        </div>
+      </div>
+    {:else if status === 'unsold'}
+      <div class="outcome outcome-unsold">
+        <strong>Encerrado sem lances</strong>
+        <p class="muted small">O leilão atingiu o horário de término sem ofertas registradas.</p>
+      </div>
+    {:else if status === 'live'}
+      <div class="leader-banner" class:is-user-leader={isLeader}>
+        <span class="leader-icon">{isLeader ? '⭐' : '👤'}</span>
+        <div class="leader-text">
+          <span class="label">{isLeader ? 'Sua liderança' : 'Líder atual'}</span>
+          <strong>
+            {#if auction.bidCount === 0}
+              Nenhum lance ainda
+            {:else if isLeader}
+              Você está na liderança ({formatMoney(auction.currentPrice)})
+            {:else}
+              {auction.highestBidderName} ({formatMoney(auction.currentPrice)})
+            {/if}
+          </strong>
+        </div>
+      </div>
+    {/if}
 
     {#if status === 'cancelled'}
       <p class="note cancelled">
@@ -134,8 +174,13 @@
         {#if room.bids.length}
           <ul>
             {#each room.bids as bid (bid.id)}
-              <li in:flash>
-                <span class="bidder">{bid.bidderName}</span>
+              <li in:flash class:my-bid={auth.user?.id === bid.bidderId}>
+                <span class="bidder">
+                  {bid.bidderName}
+                  {#if auth.user?.id === bid.bidderId}
+                    <span class="you-pill">Você</span>
+                  {/if}
+                </span>
                 <span class="amount">{formatMoney(bid.amount)}</span>
                 <span class="muted small">{formatTimeAgo(bid.createdAt, clock.now)}</span>
               </li>
@@ -310,6 +355,82 @@
 
   .small {
     font-size: 13px;
+  }
+
+  .stats-min strong {
+    font-size: 20px;
+    line-height: 1.2;
+    color: var(--accent);
+  }
+
+  .outcome {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 16px;
+    border-radius: 12px;
+  }
+
+  .outcome-sold {
+    background: color-mix(in srgb, var(--green, #22c55e) 15%, var(--surface-2));
+    border: 1px solid color-mix(in srgb, var(--green, #22c55e) 40%, var(--border));
+  }
+
+  .outcome-unsold {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+  }
+
+  .outcome-trophy {
+    font-size: 28px;
+  }
+
+  .leader-banner {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 14px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    transition: background 0.2s, border-color 0.2s;
+  }
+
+  .leader-banner.is-user-leader {
+    background: color-mix(in srgb, var(--accent) 12%, var(--surface-2));
+    border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  }
+
+  .leader-icon {
+    font-size: 20px;
+  }
+
+  .leader-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .leader-text strong {
+    font-size: 14px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .you-pill {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 6px;
+    background: var(--accent);
+    color: white;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+  }
+
+  .my-bid {
+    background: color-mix(in srgb, var(--accent) 6%, transparent);
   }
 
   .gate {

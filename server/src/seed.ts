@@ -1,13 +1,20 @@
 import type { Category } from '@auction/shared';
-import { createAuction } from './services/auctions';
+import { createAuction, placeBid } from './services/auctions';
 import { hashPassword } from './services/passwords';
+import { createUser } from './services/users';
 
 const HOUR = 60 * 60 * 1000;
-import { createUser } from './services/users';
 
 // A regular user that owns the sample listings (there are no admins, RF03).
 // Log in with it to see the seller's view of an auction.
 export const DEMO_SELLER = { name: 'Arremate Demo', email: 'demo@arremate.dev', password: 'Demo@12345' };
+
+// Sample buyers for demonstration (RNF04: ao menos 1 comitente e 3 compradores).
+export const DEMO_BUYERS = [
+  { name: 'Bernardo Lima', email: 'comprador1@arremate.dev', password: 'Demo@12345' },
+  { name: 'Camila Rocha', email: 'comprador2@arremate.dev', password: 'Demo@12345' },
+  { name: 'Daniel Souza', email: 'comprador3@arremate.dev', password: 'Demo@12345' },
+];
 
 // Placeholder catalog so the UI has something to show in development.
 // Prices are in reais here and converted to cents on insert.
@@ -43,9 +50,14 @@ const AUCTIONS: { title: string; category: Category; price: number; increment: n
 export async function seed() {
   const seller = createUser({ ...DEMO_SELLER, passwordHash: await hashPassword(DEMO_SELLER.password) });
 
-  AUCTIONS.forEach((auction, i) => {
+  const buyers = [];
+  for (const buyer of DEMO_BUYERS) {
+    buyers.push(createUser({ ...buyer, passwordHash: await hashPassword(buyer.password) }));
+  }
+
+  const createdAuctions = AUCTIONS.map((auction, i) => {
     const startsAt = Date.now() + (auction.startsIn ?? -1) * HOUR;
-    createAuction(seller.id, {
+    return createAuction(seller.id, {
       title: auction.title,
       description: auction.description,
       category: auction.category,
@@ -58,4 +70,15 @@ export async function seed() {
       featured: auction.featured,
     });
   });
+
+  // Coloca alguns lances iniciais nos leilões ativos para demonstrar líder e histórico (RF09)
+  try {
+    const liveAuction = createdAuctions[0]; // Rolex
+    if (liveAuction) {
+      placeBid(liveAuction.id, buyers[0], 85_000_00, 'seed-bid-1');
+      placeBid(liveAuction.id, buyers[1], 85_500_00, 'seed-bid-2');
+    }
+  } catch {
+    // ignora se leilão não aceitou lance durante seed
+  }
 }

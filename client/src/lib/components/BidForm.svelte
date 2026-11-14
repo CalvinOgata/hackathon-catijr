@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { minNextBid, type Auction } from '@auction/shared';
+  import { calculateMinIncrement, minNextBid, type Auction } from '@auction/shared';
+  import { auth } from '#lib/auth.svelte.ts';
   import { clock } from '#lib/clock.svelte.ts';
   import { formatMoney } from '#lib/format.ts';
   import { socket } from '#lib/socket.svelte.ts';
@@ -8,10 +9,12 @@
 
   const minimum = $derived(minNextBid(auction));
   const ended = $derived(Date.parse(auction.endsAt) <= clock.now);
+  const isLeader = $derived(auth.user?.id !== undefined && auth.user?.id === auction.highestBidderId);
 
   /** In reais, as typed by the user. */
   let amount = $state<number | null>(null);
   let submitting = $state(false);
+  let cooldown = $state(false);
   let feedback = $state<{ kind: 'error' | 'success'; text: string } | null>(null);
 
   // Suggest the minimum, and bump the amount up when someone else outbids
@@ -19,47 +22,83 @@
     if (amount === null || amount * 100 < minimum) amount = minimum / 100;
   });
 
-  const quickIncrements = $derived([1, 5, 10].map((times) => times * auction.minIncrement));
+  const increment = $derived(calculateMinIncrement(auction.currentPrice));
+  const quickIncrements = $derived([1, 5, 10].map((times) => times * increment));
+
+  function generateIdempotencyKey(): string {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID();
+    }
+    return `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+  }
 
   async function submit(event: SubmitEvent) {
     event.preventDefault();
-    if (amount === null) return;
+    if (amount === null || submitting || cooldown || isLeader) return;
 
     submitting = true;
     feedback = null;
+    const idempotencyKey = generateIdempotencyKey();
+
     try {
       const result = await socket.timeout(5000).emitWithAck('bid:place', {
         auctionId: auction.id,
         amount: Math.round(amount * 100),
+        idempotencyKey,
       });
-      feedback = result.ok ? { kind: 'success', text: 'Lance registrado! Você está na liderança.' } : { kind: 'error', text: result.error };
+
+      if (result.ok) {
+        feedback = { kind: 'success', text: 'Lance registrado! Você está na liderança.' };
+        if (result.auction) {
+          amount = minNextBid(result.auction) / 100;
+        }
+      } else {
+        // RF10: Todo lance recusado informa ao autor o motivo e o lance mínimo atual
+        let msg = result.error;
+        if (result.currentMinBid && result.currentMinBid > 0) {
+          amount = result.currentMinBid / 100;
+          msg += ` (Mínimo: ${formatMoney(result.currentMinBid)})`;
+        }
+        feedback = { kind: 'error', text: msg };
+      }
     } catch {
       feedback = { kind: 'error', text: 'O servidor não respondeu. Tente novamente.' };
     } finally {
       submitting = false;
+      // RF13: Cooldown visual suave de 500ms para evitar rajadas
+      cooldown = true;
+      setTimeout(() => (cooldown = false), 500);
     }
   }
 </script>
 
 {#if ended}
   <p class="closed">Este leilão foi encerrado.</p>
+{:else if isLeader}
+  <div class="leader-box" role="status">
+    <div class="leader-header">
+      <span class="leader-star">⭐</span>
+      <strong>Você é o líder atual deste leilão!</strong>
+    </div>
+    <p class="muted small">Seu lance de {formatMoney(auction.currentPrice)} é o maior no momento. Você não pode dar lances contra si mesmo.</p>
+  </div>
 {:else}
   <form onsubmit={submit}>
     <label for="bid-amount" class="label">
-      Seu lance <span class="muted">· mín. {formatMoney(minimum)}</span>
+      Seu lance <span class="muted">· mín. {formatMoney(minimum)} (+{formatMoney(increment)} mín.)</span>
     </label>
     <div class="amount">
       <span class="currency">R$</span>
       <input id="bid-amount" class="input" type="number" inputmode="decimal" step="0.01" min={minimum / 100} required bind:value={amount} />
     </div>
 
-    <div class="quick">
-      {#each quickIncrements as increment (increment)}
-        <button type="button" onclick={() => (amount = (amount ?? 0) + increment / 100)}>+{formatMoney(increment)}</button>
+    <div class="quick" aria-label="Incrementos rápidos de lance">
+      {#each quickIncrements as inc (inc)}
+        <button type="button" onclick={() => (amount = (amount ?? minimum / 100) + inc / 100)}>+{formatMoney(inc)}</button>
       {/each}
     </div>
 
-    <button class="btn btn-primary full" disabled={submitting}>
+    <button class="btn btn-primary full" disabled={submitting || cooldown}>
       {submitting ? 'Enviando lance…' : 'Dar lance'}
     </button>
 
@@ -135,5 +174,27 @@
     border-radius: 10px;
     color: var(--muted);
     font-weight: 600;
+  }
+
+  .leader-box {
+    padding: 14px 16px;
+    background: color-mix(in srgb, var(--accent) 12%, var(--surface-2));
+    border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+    border-radius: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .leader-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    color: var(--text);
+  }
+
+  .leader-star {
+    font-size: 16px;
   }
 </style>
