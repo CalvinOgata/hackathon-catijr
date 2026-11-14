@@ -5,7 +5,7 @@ import { createUser } from './services/users';
 
 // A regular user that owns the sample listings (there are no admins, RF03).
 // Log in with it to see the seller's view of an auction.
-export const DEMO_SELLER = { name: 'Arremate Demo', email: 'demo@arremate.dev', password: 'demo12345' };
+export const DEMO_SELLER = { name: 'Arremate Demo', email: 'demo@arremate.dev', password: 'Demo@12345' };
 
 // Placeholder catalog so the UI has something to show in development.
 // Prices are in reais here and converted to cents on insert.

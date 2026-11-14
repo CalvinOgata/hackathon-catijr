@@ -50,6 +50,15 @@ export interface SessionRecord {
   absoluteExpiresAt: number;
 }
 
+/** Wrong-password streak for one email (login brute-force protection). */
+export interface LoginAttemptsRecord {
+  failures: number;
+  /** Password checks started but not finished yet (hashing is async). */
+  inFlight: number;
+  lastFailureAt: number;
+  lockedUntil: number;
+}
+
 export const store = {
   users: new Map<number, UserRecord>(),
   userIdsByEmail: new Map<string, number>(),
@@ -58,6 +67,8 @@ export const store = {
   bidsByAuction: new Map<number, BidRecord[]>(),
   sessions: new Map<number, SessionRecord>(),
   sessionIdsByTokenHash: new Map<string, number>(),
+  /** Keyed by normalized email, whether or not an account exists for it. */
+  loginAttempts: new Map<string, LoginAttemptsRecord>(),
 };
 
 const lastIds = { user: 0, auction: 0, bid: 0, session: 0 };

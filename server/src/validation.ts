@@ -7,6 +7,8 @@ const FIELD_LABELS: Record<string, string> = {
   name: 'Nome de exibição',
   email: 'E-mail',
   password: 'Senha',
+  currentPassword: 'Senha atual',
+  newPassword: 'Nova senha',
   title: 'Nome',
   description: 'Descrição',
   category: 'Categoria',

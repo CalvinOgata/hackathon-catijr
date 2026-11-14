@@ -5,7 +5,31 @@ export interface PublicUser {
   id: number;
   name: string;
   email: string;
+  createdAt: string; // ISO date
 }
+
+/** Applied after trimming and collapsing repeated spaces. */
+export const DISPLAY_NAME_LENGTH = { min: 2, max: 60 } as const;
+
+export const normalizeDisplayName = (name: string) => name.trim().replace(/\s+/g, ' ');
+
+export const PASSWORD_LENGTH = { min: 8, max: 128 } as const;
+
+/**
+ * Password policy, checked by the server (the authority) and shown live in the forms.
+ * Labels are user-facing, hence in Portuguese.
+ */
+export const PASSWORD_RULES = [
+  { label: `De ${PASSWORD_LENGTH.min} a ${PASSWORD_LENGTH.max} caracteres`, test: (p: string) => p.length >= PASSWORD_LENGTH.min && p.length <= PASSWORD_LENGTH.max },
+  { label: 'Uma letra minúscula', test: (p: string) => /\p{Ll}/u.test(p) },
+  { label: 'Uma letra maiúscula', test: (p: string) => /\p{Lu}/u.test(p) },
+  { label: 'Um número', test: (p: string) => /\p{N}/u.test(p) },
+  { label: 'Um símbolo (ex.: ! @ # $ %)', test: (p: string) => /[^\p{L}\p{N}\s]/u.test(p) },
+] as const;
+
+/** Labels of the rules the password breaks; empty when it's acceptable. */
+export const passwordProblems = (password: string): string[] =>
+  PASSWORD_RULES.filter((rule) => !rule.test(password)).map((rule) => rule.label);
 
 export interface AuthResponse {
   token: string;

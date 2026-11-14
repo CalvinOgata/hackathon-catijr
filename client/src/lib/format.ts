@@ -2,6 +2,11 @@ const money = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL
 
 export const formatMoney = (cents: number) => money.format(cents / 100);
 
+const longDate = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'long' });
+
+/** In the viewer's own timezone (RF19). */
+export const formatDate = (iso: string) => longDate.format(new Date(iso));
+
 export function formatTimeLeft(ms: number): string {
   if (ms <= 0) return 'Encerrado';
   const totalSeconds = Math.floor(ms / 1000);

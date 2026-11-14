@@ -2,6 +2,7 @@ import cors from '@fastify/cors';
 import Fastify from 'fastify';
 import { config } from './config';
 import authPlugin from './plugins/auth';
+import accountRoutes from './routes/account';
 import auctionRoutes from './routes/auctions';
 import authRoutes from './routes/auth';
 import { registerSocket } from './socket';
@@ -26,6 +27,7 @@ export async function buildApp() {
 
   app.get('/api/health', async () => ({ ok: true }));
   await app.register(authRoutes, { prefix: '/api/auth' });
+  await app.register(accountRoutes, { prefix: '/api/account' });
   await app.register(auctionRoutes, { prefix: '/api/auctions' });
 
   return app;

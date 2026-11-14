@@ -145,6 +145,24 @@ img {
   border-color: var(--accent);
 }
 
+.input[aria-invalid='true'] {
+  border-color: var(--red);
+}
+
+.field-error,
+.field-ok {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.field-error {
+  color: var(--red);
+}
+
+.field-ok {
+  color: var(--green);
+}
+
 .alert {
   padding: 10px 12px;
   border-radius: 10px;

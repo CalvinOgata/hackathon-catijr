@@ -67,6 +67,18 @@ export function deleteSession(id: number) {
   store.sessionIdsByTokenHash.delete(session.tokenHash);
 }
 
+/** Ends every session of a user except one (e.g. after a password change). Returns the ended ids. */
+export function deleteOtherSessions(userId: number, keepSessionId: number): number[] {
+  const ended: number[] = [];
+  for (const session of store.sessions.values()) {
+    if (session.userId === userId && session.id !== keepSessionId) {
+      deleteSession(session.id);
+      ended.push(session.id);
+    }
+  }
+  return ended;
+}
+
 export function deleteExpiredSessions() {
   const now = Date.now();
   for (const session of store.sessions.values()) {

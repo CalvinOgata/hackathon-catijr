@@ -55,6 +55,15 @@ class Auth {
     this.#start(await api.post<AuthResponse>('/auth/signup', { name, email, password }));
   }
 
+  async updateName(name: string) {
+    this.user = await api.patch<PublicUser>('/account', { name });
+  }
+
+  /** Other sessions of this account are ended by the server; this one stays. */
+  async changePassword(currentPassword: string, newPassword: string) {
+    await api.put('/account/password', { currentPassword, newPassword });
+  }
+
   logout() {
     // The request captures the current token before we clear it; no need to wait for it
     api.post('/auth/logout').catch(() => {});

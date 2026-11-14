@@ -52,8 +52,14 @@
       {#if !auth.ready}
         <!-- Avoid flashing the login buttons while the session is restored -->
       {:else if auth.user}
-        <a href="/sell" class="btn btn-primary">Anunciar item</a>
-        <span class="user">{auth.user.name}</span>
+        <a href="/sell" class="btn btn-primary">Anunciar<span class="wide">&nbsp;item</span></a>
+        <a href="/account" class="btn btn-ghost account" title="Minha conta" aria-label="Minha conta ({auth.user.name})">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+            <circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" stroke-width="2" />
+            <path d="M4 21a8 8 0 0 1 16 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+          </svg>
+          <span class="user">{auth.user.name}</span>
+        </a>
         <button class="btn btn-ghost" onclick={() => auth.logout()}>Sair</button>
       {:else}
         <a href={loginHref} class="btn btn-ghost">Entrar</a>
@@ -153,9 +159,13 @@
     box-shadow: 0 0 0 3px var(--green-soft);
   }
 
+  .account {
+    max-width: 200px;
+  }
+
   .user {
-    font-weight: 600;
-    margin: 0 4px 0 8px;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   @media (max-width: 720px) {
@@ -165,7 +175,8 @@
 
     .logo span,
     .live,
-    .user {
+    .user,
+    .wide {
       display: none;
     }
 
