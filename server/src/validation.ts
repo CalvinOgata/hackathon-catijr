@@ -13,13 +13,12 @@ const FIELD_LABELS: Record<string, string> = {
   description: 'Descrição',
   category: 'Categoria',
   startingPrice: 'Preço inicial',
-  minIncrement: 'Incremento mínimo',
   durationMinutes: 'Duração (minutos)',
   q: 'Busca',
   id: 'ID',
 };
 
-const MONEY_FIELDS = new Set(['startingPrice', 'minIncrement']);
+const MONEY_FIELDS = new Set(['startingPrice']);
 
 const money = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 

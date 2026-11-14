@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { AUCTION_STATUS_LABELS, auctionStatus, calculateMinIncrement, minNextBid, type Auction } from '@auction/shared';
+  import { AUCTION_STATUS_LABELS, auctionStatus, type Auction } from '@auction/shared';
   import type { Snippet } from 'svelte';
   import { page } from '$app/state';
   import { auth } from '#lib/auth.svelte.ts';
@@ -26,7 +26,9 @@
 
   const auction = $derived(room?.auction?.id === listing.id ? room.auction : listing);
   const isSeller = $derived(auth.user?.id === auction.sellerId);
-  const isLeader = $derived(auth.user?.id !== undefined && auth.user?.id === auction.highestBidderId);
+  // Who leads is only known inside the room (RF04): public listing data has no bidder information
+  const leader = $derived(room?.joined && room.auction?.id === listing.id ? room.leader : null);
+  const isLeader = $derived(!!room?.isMine(leader));
   const here = $derived(encodeURIComponent(page.url.pathname + page.url.search));
   const status = $derived(auctionStatus(auction, clock.now));
   const scheduled = $derived(status === 'scheduled');
@@ -85,8 +87,8 @@
       {#if !over}
         <div class="stats-min">
           <span class="label">Mín. próximo lance</span>
-          <strong class="min-price">{formatMoney(minNextBid(auction))}</strong>
-          <span class="muted small">+{formatMoney(calculateMinIncrement(auction.currentPrice))} mín.</span>
+          <strong class="min-price">{formatMoney(auction.minBid)}</strong>
+          <span class="muted small">+{formatMoney(auction.minIncrement)} mín.</span>
         </div>
       {/if}
       <div class="ends">
@@ -105,7 +107,10 @@
         <span class="outcome-trophy">🏆</span>
         <div>
           <strong>Leilão Vendido</strong>
-          <p class="small">Vencedor: <strong>{isWinner ? 'Você!' : auction.highestBidderName}</strong> por <strong>{formatMoney(auction.currentPrice)}</strong></p>
+          <p class="small">
+            {#if leader}Vencedor: <strong>{isWinner ? 'Você!' : leader.bidderName}</strong> por{:else}Arrematado por{/if}
+            <strong>{formatMoney(auction.currentPrice)}</strong>
+          </p>
         </div>
       </div>
     {:else if status === 'unsold'}
@@ -113,7 +118,7 @@
         <strong>Encerrado sem lances</strong>
         <p class="muted small">O leilão atingiu o horário de término sem ofertas registradas.</p>
       </div>
-    {:else if status === 'live'}
+    {:else if status === 'live' && room?.joined}
       <div class="leader-banner" class:is-user-leader={isLeader}>
         <span class="leader-icon">{isLeader ? '⭐' : '👤'}</span>
         <div class="leader-text">
@@ -124,7 +129,7 @@
             {:else if isLeader}
               Você está na liderança ({formatMoney(auction.currentPrice)})
             {:else}
-              {auction.highestBidderName} ({formatMoney(auction.currentPrice)})
+              {leader?.bidderName} ({formatMoney(auction.currentPrice)})
             {/if}
           </strong>
         </div>
@@ -165,7 +170,7 @@
         <p class="muted small">Os lances abrem quando o leilão começar.</p>
       {:else}
         {#key auction.id}
-          <BidForm {auction} />
+          <BidForm {auction} leading={isLeader} />
         {/key}
       {/if}
 
@@ -174,10 +179,10 @@
         {#if room.bids.length}
           <ul>
             {#each room.bids as bid (bid.id)}
-              <li in:flash class:my-bid={auth.user?.id === bid.bidderId}>
+              <li in:flash class:my-bid={room.isMine(bid)}>
                 <span class="bidder">
                   {bid.bidderName}
-                  {#if auth.user?.id === bid.bidderId}
+                  {#if room.isMine(bid)}
                     <span class="you-pill">Você</span>
                   {/if}
                 </span>

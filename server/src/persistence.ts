@@ -1,7 +1,7 @@
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 import { config } from './config';
-import { restoreIds, store, type AuctionRecord, type BidRecord, type ItemRecord, type SessionRecord, type UserRecord } from './store';
+import { bidKey, restoreIds, store, type AuctionRecord, type BidRecord, type ItemRecord, type SessionRecord, type UserRecord } from './store';
 
 // The store is saved as one JSON file on the VM's disk (managers' rule: no database, no cloud).
 //
@@ -42,10 +42,15 @@ export function loadStore(): boolean {
   for (const item of data.items) store.items.set(item.id, item);
   for (const auction of data.auctions) {
     auction.cancelledAt ??= null; // saved before cancelling existed
+    delete (auction as { minIncrement?: number }).minIncrement; // sellers used to choose it; now it's the RF14 table
     store.auctions.set(auction.id, auction);
     store.bidsByAuction.set(auction.id, []);
   }
-  for (const bid of data.bids.sort((a, b) => a.id - b.id)) store.bidsByAuction.get(bid.auctionId)!.push(bid);
+  for (const bid of data.bids.sort((a, b) => a.id - b.id)) {
+    bid.idempotencyKey ??= null; // saved before bids had one
+    store.bidsByAuction.get(bid.auctionId)!.push(bid);
+    if (bid.idempotencyKey !== null) store.bidsByKey.set(bidKey(bid.userId, bid.auctionId, bid.idempotencyKey), bid);
+  }
   for (const session of data.sessions) {
     store.sessions.set(session.id, session);
     store.sessionIdsByTokenHash.set(session.tokenHash, session.id);
