@@ -5,12 +5,12 @@
   import { auth } from '#lib/auth.svelte.ts';
 
   const DURATIONS = [
-    { label: '15 minutes', minutes: 15 },
-    { label: '1 hour', minutes: 60 },
-    { label: '6 hours', minutes: 6 * 60 },
-    { label: '1 day', minutes: 24 * 60 },
-    { label: '3 days', minutes: 3 * 24 * 60 },
-    { label: '7 days', minutes: 7 * 24 * 60 },
+    { label: '15 minutos', minutes: 15 },
+    { label: '1 hora', minutes: 60 },
+    { label: '6 horas', minutes: 6 * 60 },
+    { label: '1 dia', minutes: 24 * 60 },
+    { label: '3 dias', minutes: 3 * 24 * 60 },
+    { label: '7 dias', minutes: 7 * 24 * 60 },
   ];
 
   let title = $state('');
@@ -55,24 +55,24 @@
 </script>
 
 <svelte:head>
-  <title>List an item · Arremate</title>
+  <title>Anunciar item · Arremate</title>
 </svelte:head>
 
 {#if auth.user}
   <div class="auth-page">
     <form class="auth-card sell" onsubmit={submit}>
       <div>
-        <h1>List an item</h1>
-        <p class="muted">Your auction goes live as soon as you publish it. You can't bid on your own items.</p>
+        <h1>Anunciar um item</h1>
+        <p class="muted">O leilão começa assim que você publicar. Você não pode dar lances nos próprios itens.</p>
       </div>
 
       <label>
-        <span>Title</span>
-        <input class="input" required minlength="3" maxlength="100" bind:value={title} placeholder="e.g. 1979 Fender Stratocaster" />
+        <span>Nome</span>
+        <input class="input" required minlength="3" maxlength="100" bind:value={title} placeholder="ex.: Fender Stratocaster 1979" />
       </label>
 
       <label>
-        <span>Category</span>
+        <span>Categoria</span>
         <select class="input" bind:value={category}>
           {#each CATEGORIES as name (name)}
             <option value={name}>{name}</option>
@@ -81,28 +81,28 @@
       </label>
 
       <label>
-        <span>Description</span>
-        <textarea class="input" rows="4" maxlength="2000" bind:value={description} placeholder="Condition, history, what's included…"></textarea>
+        <span>Descrição</span>
+        <textarea class="input" rows="4" maxlength="2000" bind:value={description} placeholder="Estado de conservação, histórico, o que acompanha…"></textarea>
       </label>
 
       <label>
-        <span>Image URL <small class="muted">(optional)</small></span>
+        <span>URL da imagem <small class="muted">(opcional)</small></span>
         <input class="input" type="url" pattern="https?://.+" maxlength="500" bind:value={imageUrl} placeholder="https://…" />
       </label>
 
       <div class="row">
         <label>
-          <span>Starting price (R$)</span>
+          <span>Preço inicial (R$)</span>
           <input class="input" type="number" required step="0.01" min={LISTING_LIMITS.minPrice / 100} max={LISTING_LIMITS.maxPrice / 100} bind:value={startingPrice} />
         </label>
         <label>
-          <span>Min. increment (R$)</span>
+          <span>Incremento mínimo (R$)</span>
           <input class="input" type="number" required step="0.01" min={LISTING_LIMITS.minPrice / 100} max={LISTING_LIMITS.maxPrice / 100} bind:value={minIncrement} />
         </label>
       </div>
 
       <label>
-        <span>Duration</span>
+        <span>Duração</span>
         <select class="input" bind:value={durationMinutes}>
           {#each DURATIONS as option (option.minutes)}
             <option value={option.minutes}>{option.label}</option>
@@ -114,7 +114,7 @@
         <p class="alert alert-error" role="alert">{error}</p>
       {/if}
 
-      <button class="btn btn-primary" disabled={submitting}>{submitting ? 'Publishing…' : 'Publish auction'}</button>
+      <button class="btn btn-primary" disabled={submitting}>{submitting ? 'Publicando…' : 'Publicar leilão'}</button>
     </form>
   </div>
 {/if}

@@ -25,7 +25,7 @@ const SWEEP_INTERVAL_MS = 60 * 1000;
 const roomName = (auctionId: number) => `auction:${auctionId}`;
 const sessionRoom = (sessionId: number) => `session:${sessionId}`;
 
-const sessionFailure: Failure = { ok: false, error: 'Your session has expired. Please log in again.', code: SESSION_INVALID };
+const sessionFailure: Failure = { ok: false, error: 'Sua sessão expirou. Entre novamente.', code: SESSION_INVALID };
 
 /** Downgrades a connection to guest: it leaves every room and is told its session ended. */
 function endSession(socket: AppSocket) {
@@ -68,10 +68,10 @@ export function registerSocket(app: FastifyInstance) {
     socket.on('room:join', (auctionId, ack) => {
       if (typeof ack !== 'function') return;
       if (!requireSession(socket)) return ack(sessionFailure);
-      if (!isAuctionId(auctionId)) return ack({ ok: false, error: 'Invalid auction' });
+      if (!isAuctionId(auctionId)) return ack({ ok: false, error: 'Leilão inválido' });
 
       const auction = getAuctionDetail(auctionId);
-      if (!auction) return ack({ ok: false, error: 'Auction not found' });
+      if (!auction) return ack({ ok: false, error: 'Leilão não encontrado' });
 
       socket.join(roomName(auctionId));
       ack({ ok: true, auction });
@@ -89,10 +89,10 @@ export function registerSocket(app: FastifyInstance) {
 
       const { auctionId, amount } = payload ?? {};
       if (!isAuctionId(auctionId) || !Number.isInteger(amount) || amount <= 0) {
-        return ack({ ok: false, error: 'Invalid bid' });
+        return ack({ ok: false, error: 'Lance inválido' });
       }
       if (!socket.rooms.has(roomName(auctionId))) {
-        return ack({ ok: false, error: 'Enter the auction room to bid' });
+        return ack({ ok: false, error: 'Entre na sala do leilão para dar lances' });
       }
 
       try {
@@ -104,7 +104,7 @@ export function registerSocket(app: FastifyInstance) {
       } catch (err) {
         if (err instanceof BidError) return ack({ ok: false, error: err.message });
         app.log.error(err, 'Failed to place bid');
-        ack({ ok: false, error: 'Something went wrong, please try again' });
+        ack({ ok: false, error: 'Algo deu errado. Tente novamente.' });
       }
     });
   });

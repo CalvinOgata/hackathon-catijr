@@ -53,7 +53,7 @@
   <title>{auction ? `${auction.title} · Arremate` : 'Arremate'}</title>
 </svelte:head>
 
-<a href="/" class="back muted">← All auctions</a>
+<a href="/" class="back muted">← Todos os leilões</a>
 
 {#if error}
   <p class="alert alert-error">{error}</p>

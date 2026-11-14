@@ -28,40 +28,40 @@
 </script>
 
 <svelte:head>
-  <title>Sign up · Arremate</title>
+  <title>Criar conta · Arremate</title>
 </svelte:head>
 
 <div class="auth-page">
   <form class="auth-card" onsubmit={submit}>
     <div>
-      <h1>Create your account</h1>
-      <p class="muted">Join to bid on live auctions in real time.</p>
+      <h1>Crie sua conta</h1>
+      <p class="muted">Cadastre-se para dar lances em leilões em tempo real.</p>
     </div>
 
     <label>
-      <span>Name</span>
+      <span>Nome de exibição</span>
       <input class="input" autocomplete="name" required minlength="2" maxlength="60" bind:value={name} />
     </label>
 
     <label>
-      <span>Email</span>
+      <span>E-mail</span>
       <input class="input" type="email" autocomplete="email" required bind:value={email} />
     </label>
 
     <label>
-      <span>Password</span>
+      <span>Senha</span>
       <input class="input" type="password" autocomplete="new-password" required minlength="8" bind:value={password} />
-      <small class="muted">At least 8 characters</small>
+      <small class="muted">No mínimo 8 caracteres</small>
     </label>
 
     {#if error}
       <p class="alert alert-error" role="alert">{error}</p>
     {/if}
 
-    <button class="btn btn-primary" disabled={submitting}>{submitting ? 'Creating account…' : 'Sign up'}</button>
+    <button class="btn btn-primary" disabled={submitting}>{submitting ? 'Criando conta…' : 'Criar conta'}</button>
 
     <p class="muted switch">
-      Already have an account? <a href="/login?redirect={encodeURIComponent(redirect)}">Log in</a>
+      Já tem uma conta? <a href="/login?redirect={encodeURIComponent(redirect)}">Entrar</a>
     </p>
   </form>
 </div>

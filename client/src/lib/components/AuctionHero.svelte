@@ -34,7 +34,7 @@
       <div>
         <span class="category">{auction.category}</span>
         <svelte:element this={headingLevel} class="title">{auction.title}</svelte:element>
-        <p class="seller muted">Listed by <strong>{isSeller ? 'you' : auction.sellerName}</strong></p>
+        <p class="seller muted">Anunciado por <strong>{isSeller ? 'você' : auction.sellerName}</strong></p>
       </div>
       {@render controls?.()}
     </header>
@@ -48,32 +48,32 @@
   <aside class="panel">
     <div class="stats">
       <div>
-        <span class="label">{auction.bidCount ? 'Current bid' : 'Starting price'}</span>
+        <span class="label">{auction.bidCount ? 'Lance atual' : 'Preço inicial'}</span>
         {#key auction.currentPrice}
           <strong class="price" in:flash>{formatMoney(auction.currentPrice)}</strong>
         {/key}
-        <span class="muted small">{auction.bidCount} {auction.bidCount === 1 ? 'bid' : 'bids'}</span>
+        <span class="muted small">{auction.bidCount} {auction.bidCount === 1 ? 'lance' : 'lances'}</span>
       </div>
       <div class="ends">
-        <span class="label">Ends in</span>
+        <span class="label">Termina em</span>
         <strong><Countdown endsAt={auction.endsAt} /></strong>
       </div>
     </div>
 
     {#if !auth.user}
       <div class="gate">
-        <p><strong>The auction room is for members.</strong></p>
-        <p class="muted small">Log in to follow bids live and place your own.</p>
-        <a class="btn btn-primary full" href="/login?redirect={here}">Log in to enter the room</a>
-        <a class="btn btn-ghost full" href="/signup?redirect={here}">Create an account</a>
+        <p><strong>A sala do leilão é exclusiva para membros.</strong></p>
+        <p class="muted small">Entre para acompanhar os lances ao vivo e dar os seus.</p>
+        <a class="btn btn-primary full" href="/login?redirect={here}">Entrar para acessar a sala</a>
+        <a class="btn btn-ghost full" href="/signup?redirect={here}">Criar conta</a>
       </div>
     {:else if room?.error}
       <p class="alert alert-error">{room.error}</p>
     {:else if !room?.joined}
-      <p class="muted small">Entering the auction room…</p>
+      <p class="muted small">Entrando na sala do leilão…</p>
     {:else}
       {#if isSeller}
-        <p class="note">This is your auction. Sellers can't bid on their own items.</p>
+        <p class="note">Este leilão é seu. Você não pode dar lances no próprio leilão.</p>
       {:else}
         {#key auction.id}
           <BidForm {auction} />
@@ -81,7 +81,7 @@
       {/if}
 
       <section class="history">
-        <h3>Recent bids</h3>
+        <h3>Últimos lances</h3>
         {#if room.bids.length}
           <ul>
             {#each room.bids as bid (bid.id)}
@@ -93,7 +93,7 @@
             {/each}
           </ul>
         {:else}
-          <p class="muted small">No bids yet.{isSeller ? '' : ' Be the first!'}</p>
+          <p class="muted small">Nenhum lance ainda.{isSeller ? '' : ' Seja o primeiro!'}</p>
         {/if}
       </section>
     {/if}

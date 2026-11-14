@@ -29,15 +29,20 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   if (authToken) headers.Authorization = `Bearer ${authToken}`;
 
-  const res = await fetch(`${API_URL}/api${path}`, {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}/api${path}`, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch {
+    throw new ApiError(0, 'Não foi possível conectar ao servidor. Verifique sua conexão.');
+  }
   const data = await res.json().catch(() => null);
 
   if (res.status === 401 && data?.code === SESSION_INVALID) sessionInvalidHandler?.();
-  if (!res.ok) throw new ApiError(res.status, data?.message ?? res.statusText);
+  if (!res.ok) throw new ApiError(res.status, data?.message ?? `Erro inesperado (${res.status})`);
   return data as T;
 }
 

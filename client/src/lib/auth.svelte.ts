@@ -64,7 +64,7 @@ class Auth {
   expire() {
     if (!this.user) return;
     this.#clear();
-    this.notice = 'Your session has expired. Please log in again.';
+    this.notice = 'Sua sessão expirou. Entre novamente.';
   }
 
   #start({ token, user }: AuthResponse) {

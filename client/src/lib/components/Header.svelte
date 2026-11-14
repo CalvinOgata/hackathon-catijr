@@ -41,23 +41,23 @@
       <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
         <path d="m21 21-4.3-4.3M11 18a7 7 0 1 1 0-14 7 7 0 0 1 0 14Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
       </svg>
-      <input bind:this={input} bind:value={query} oninput={search} type="search" placeholder="Search auctions" aria-label="Search auctions" />
+      <input bind:this={input} bind:value={query} oninput={search} type="search" placeholder="Buscar leilões" aria-label="Buscar leilões" />
     </label>
 
     <div class="actions">
-      <span class="live" class:on={connection.connected} title={connection.connected ? 'Receiving live updates' : 'Connecting…'}>
-        <span class="dot"></span>Live
+      <span class="live" class:on={connection.connected} title={connection.connected ? 'Recebendo atualizações ao vivo' : 'Conectando…'}>
+        <span class="dot"></span>Ao vivo
       </span>
 
       {#if !auth.ready}
         <!-- Avoid flashing the login buttons while the session is restored -->
       {:else if auth.user}
-        <a href="/sell" class="btn btn-primary">List an item</a>
+        <a href="/sell" class="btn btn-primary">Anunciar item</a>
         <span class="user">{auth.user.name}</span>
-        <button class="btn btn-ghost" onclick={() => auth.logout()}>Log out</button>
+        <button class="btn btn-ghost" onclick={() => auth.logout()}>Sair</button>
       {:else}
-        <a href={loginHref} class="btn btn-ghost">Log in</a>
-        <a href="/signup" class="btn btn-primary">Sign up</a>
+        <a href={loginHref} class="btn btn-ghost">Entrar</a>
+        <a href="/signup" class="btn btn-primary">Criar conta</a>
       {/if}
     </div>
   </div>

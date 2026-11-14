@@ -45,7 +45,7 @@ export default async function auctionRoutes(app: FastifyInstance) {
     },
     async (request, reply) => {
       const auction = getAuction(request.params.id);
-      if (!auction) return reply.code(404).send({ message: 'Auction not found' });
+      if (!auction) return reply.code(404).send({ message: 'Leilão não encontrado' });
       return auction;
     },
   );

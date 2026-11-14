@@ -11,7 +11,8 @@
   let auctions = $state<Auction[]>([]);
   let loading = $state(true);
   let error = $state<string | null>(null);
-  let category = $state('All');
+  const ALL = 'Todas';
+  let category = $state(ALL);
   let heroIndex = $state(0);
   let heroRoom = $state<AuctionRoom | null>(null);
 
@@ -25,8 +26,8 @@
   const hero = $derived(featured.length ? featured[heroIndex % featured.length] : undefined);
   const heroId = $derived(hero?.id);
 
-  const categories = $derived(['All', ...new Set(auctions.map((a) => a.category))]);
-  const visible = $derived(category === 'All' ? auctions : auctions.filter((a) => a.category === category));
+  const categories = $derived([ALL, ...new Set(auctions.map((a) => a.category))]);
+  const visible = $derived(category === ALL ? auctions : auctions.filter((a) => a.category === category));
 
   // (Re)load whenever the search changes
   $effect(() => {
@@ -40,7 +41,7 @@
       .then((result) => {
         if (cancelled) return;
         auctions = result;
-        category = 'All';
+        category = ALL;
       })
       .catch((err) => !cancelled && (error = err.message))
       .finally(() => !cancelled && (loading = false));
@@ -80,24 +81,24 @@
 </script>
 
 <svelte:head>
-  <title>{query ? `“${query}” · Arremate` : 'Arremate · Live auctions'}</title>
+  <title>{query ? `“${query}” · Arremate` : 'Arremate · Leilões ao vivo'}</title>
 </svelte:head>
 
 {#if error}
-  <p class="alert alert-error">Could not load auctions: {error}</p>
+  <p class="alert alert-error">Não foi possível carregar os leilões: {error}</p>
 {:else if loading && !auctions.length}
   <div class="skeleton hero-skeleton"></div>
 {/if}
 
 {#if hero && !query}
-  <section class="featured" aria-label="Featured auction">
+  <section class="featured" aria-label="Leilão em destaque">
     <AuctionHero auction={hero} room={heroRoom}>
       {#snippet controls()}
         {#if featured.length > 1}
           <div class="carousel">
-            <button onclick={() => move(-1)} aria-label="Previous featured auction">‹</button>
+            <button onclick={() => move(-1)} aria-label="Leilão em destaque anterior">‹</button>
             <span class="muted">{(heroIndex % featured.length) + 1} / {featured.length}</span>
-            <button onclick={() => move(1)} aria-label="Next featured auction">›</button>
+            <button onclick={() => move(1)} aria-label="Próximo leilão em destaque">›</button>
           </div>
         {/if}
       {/snippet}
@@ -107,14 +108,14 @@
 
 <section class="all">
   <div class="section-head">
-    <h2>{query ? `Results for “${query}”` : 'All auctions'}</h2>
+    <h2>{query ? `Resultados para “${query}”` : 'Todos os leilões'}</h2>
     {#if !loading || auctions.length}
-      <span class="muted">{visible.length} {visible.length === 1 ? 'auction' : 'auctions'}</span>
+      <span class="muted">{visible.length} {visible.length === 1 ? 'leilão' : 'leilões'}</span>
     {/if}
   </div>
 
   {#if categories.length > 2}
-    <div class="chips" role="tablist" aria-label="Categories">
+    <div class="chips" role="tablist" aria-label="Categorias">
       {#each categories as name (name)}
         <button role="tab" aria-selected={category === name} class:active={category === name} onclick={() => (category = name)}>
           {name}
@@ -130,7 +131,7 @@
       {/each}
     </div>
   {:else if !loading && !error}
-    <p class="empty muted">No auctions found{query ? ` for “${query}”` : ''}.</p>
+    <p class="empty muted">Nenhum leilão encontrado{query ? ` para “${query}”` : ''}.</p>
   {/if}
 </section>
 

@@ -32,9 +32,9 @@
         auctionId: auction.id,
         amount: Math.round(amount * 100),
       });
-      feedback = result.ok ? { kind: 'success', text: 'Bid placed! You are the highest bidder.' } : { kind: 'error', text: result.error };
+      feedback = result.ok ? { kind: 'success', text: 'Lance registrado! Você está na liderança.' } : { kind: 'error', text: result.error };
     } catch {
-      feedback = { kind: 'error', text: 'The server did not respond. Please try again.' };
+      feedback = { kind: 'error', text: 'O servidor não respondeu. Tente novamente.' };
     } finally {
       submitting = false;
     }
@@ -42,11 +42,11 @@
 </script>
 
 {#if ended}
-  <p class="closed">This auction has ended.</p>
+  <p class="closed">Este leilão foi encerrado.</p>
 {:else}
   <form onsubmit={submit}>
     <label for="bid-amount" class="label">
-      Your bid <span class="muted">· min. {formatMoney(minimum)}</span>
+      Seu lance <span class="muted">· mín. {formatMoney(minimum)}</span>
     </label>
     <div class="amount">
       <span class="currency">R$</span>
@@ -60,7 +60,7 @@
     </div>
 
     <button class="btn btn-primary full" disabled={submitting}>
-      {submitting ? 'Placing bid…' : 'Place bid'}
+      {submitting ? 'Enviando lance…' : 'Dar lance'}
     </button>
 
     {#if feedback}

@@ -21,8 +21,8 @@
   <div class="container">
     <div class="alert alert-error notice" role="alert">
       <span>{auth.notice}</span>
-      <a href="/login?redirect={encodeURIComponent(page.url.pathname + page.url.search)}">Log in</a>
-      <button onclick={() => (auth.notice = null)} aria-label="Dismiss">×</button>
+      <a href="/login?redirect={encodeURIComponent(page.url.pathname + page.url.search)}">Entrar</a>
+      <button onclick={() => (auth.notice = null)} aria-label="Fechar aviso">×</button>
     </div>
   </div>
 {/if}

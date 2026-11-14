@@ -57,7 +57,7 @@ export class AuctionRoom {
         this.error = result.error;
       }
     } catch {
-      if (!this.#left) this.error = 'Could not reach the auction room. Retrying when the connection is back…';
+      if (!this.#left) this.error = 'Não foi possível acessar a sala do leilão. Tentaremos de novo quando a conexão voltar…';
     }
   };
 

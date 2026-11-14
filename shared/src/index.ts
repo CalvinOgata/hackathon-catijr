@@ -12,7 +12,8 @@ export interface AuthResponse {
   user: PublicUser;
 }
 
-export const CATEGORIES = ['Art', 'Collectibles', 'Design', 'Electronics', 'Fashion', 'Music', 'Vehicles', 'Watches', 'Other'] as const;
+/** Shown as-is in the UI, so they're in Portuguese. */
+export const CATEGORIES = ['Arte', 'Colecionáveis', 'Design', 'Eletrônicos', 'Moda', 'Música', 'Relógios', 'Veículos', 'Outros'] as const;
 
 export type Category = (typeof CATEGORIES)[number];
 

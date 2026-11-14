@@ -27,23 +27,23 @@
 </script>
 
 <svelte:head>
-  <title>Log in · Arremate</title>
+  <title>Entrar · Arremate</title>
 </svelte:head>
 
 <div class="auth-page">
   <form class="auth-card" onsubmit={submit}>
     <div>
-      <h1>Welcome back</h1>
-      <p class="muted">Log in to place bids on live auctions.</p>
+      <h1>Entrar na sua conta</h1>
+      <p class="muted">Entre para dar lances nos leilões ao vivo.</p>
     </div>
 
     <label>
-      <span>Email</span>
+      <span>E-mail</span>
       <input class="input" type="email" autocomplete="email" required bind:value={email} />
     </label>
 
     <label>
-      <span>Password</span>
+      <span>Senha</span>
       <input class="input" type="password" autocomplete="current-password" required bind:value={password} />
     </label>
 
@@ -51,10 +51,10 @@
       <p class="alert alert-error" role="alert">{error}</p>
     {/if}
 
-    <button class="btn btn-primary" disabled={submitting}>{submitting ? 'Logging in…' : 'Log in'}</button>
+    <button class="btn btn-primary" disabled={submitting}>{submitting ? 'Entrando…' : 'Entrar'}</button>
 
     <p class="muted switch">
-      New here? <a href="/signup?redirect={encodeURIComponent(redirect)}">Create an account</a>
+      Ainda não tem conta? <a href="/signup?redirect={encodeURIComponent(redirect)}">Criar conta</a>
     </p>
   </form>
 </div>

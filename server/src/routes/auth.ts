@@ -43,7 +43,7 @@ export default async function authRoutes(app: FastifyInstance) {
   app.post<{ Body: SignupBody }>('/signup', { schema: { body: signupSchema } }, async (request, reply) => {
     const name = request.body.name.trim().replace(/\s+/g, ' ');
     if (name.length < NAME_LENGTH.min || name.length > NAME_LENGTH.max) {
-      return reply.code(400).send({ message: `Display name must have ${NAME_LENGTH.min} to ${NAME_LENGTH.max} characters` });
+      return reply.code(400).send({ message: `O nome de exibição deve ter de ${NAME_LENGTH.min} a ${NAME_LENGTH.max} caracteres` });
     }
 
     try {
@@ -51,7 +51,7 @@ export default async function authRoutes(app: FastifyInstance) {
       return reply.code(201).send(startSession(user));
     } catch (err) {
       if (err instanceof EmailTakenError) {
-        return reply.code(409).send({ message: 'An account with this email already exists' });
+        return reply.code(409).send({ message: 'Já existe uma conta com este e-mail' });
       }
       throw err;
     }
@@ -61,7 +61,7 @@ export default async function authRoutes(app: FastifyInstance) {
     const user = findUserByEmail(request.body.email);
 
     if (!user || !(await verifyPassword(request.body.password, user.passwordHash))) {
-      return reply.code(401).send({ message: 'Invalid email or password' });
+      return reply.code(401).send({ message: 'E-mail ou senha inválidos' });
     }
 
     const { passwordHash: _, ...publicUser } = user;
@@ -77,7 +77,7 @@ export default async function authRoutes(app: FastifyInstance) {
 
   app.get('/me', { onRequest: [app.authenticate] }, async (request, reply) => {
     const user = findUserById(request.session!.user.id);
-    if (!user) return reply.code(401).send({ message: 'Unauthorized' });
+    if (!user) return reply.code(401).send({ message: 'Não autorizado' });
     return user;
   });
 }

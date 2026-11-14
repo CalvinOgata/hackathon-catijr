@@ -80,13 +80,13 @@ const money = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL
 export function placeBid(auctionId: number, user: { id: number; name: string }, amount: number): { auction: Auction; bid: Bid } {
   const auction = store.auctions.get(auctionId);
 
-  if (!auction) throw new BidError('Auction not found');
-  if (auction.sellerId === user.id) throw new BidError("You can't bid on your own auction");
-  if (auction.endsAt <= Date.now()) throw new BidError('This auction has ended');
-  if (auction.highestBidderId === user.id) throw new BidError('You already have the highest bid');
+  if (!auction) throw new BidError('Leilão não encontrado');
+  if (auction.sellerId === user.id) throw new BidError('Você não pode dar lances no próprio leilão');
+  if (auction.endsAt <= Date.now()) throw new BidError('Este leilão já foi encerrado');
+  if (auction.highestBidderId === user.id) throw new BidError('Você já tem o maior lance');
 
   const minimum = minNextBid(auction);
-  if (amount < minimum) throw new BidError(`Your bid must be at least ${money.format(minimum / 100)}`);
+  if (amount < minimum) throw new BidError(`O lance deve ser de no mínimo ${money.format(minimum / 100)}`);
 
   const bid: BidRecord = { id: nextId('bid'), auctionId, userId: user.id, amount, createdAt: Date.now() };
   store.bidsByAuction.get(auctionId)!.push(bid);

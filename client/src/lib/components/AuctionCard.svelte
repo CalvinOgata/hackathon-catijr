@@ -18,7 +18,7 @@
     {#key auction.currentPrice}
       <strong in:flash>{formatMoney(auction.currentPrice)}</strong>
     {/key}
-    <span class="muted">{auction.bidCount ? `${auction.bidCount} ${auction.bidCount === 1 ? 'bid' : 'bids'}` : 'No bids yet'}</span>
+    <span class="muted">{auction.bidCount ? `${auction.bidCount} ${auction.bidCount === 1 ? 'lance' : 'lances'}` : 'Nenhum lance'}</span>
   </div>
 
   <div class="footer">

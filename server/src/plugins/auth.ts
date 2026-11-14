@@ -25,7 +25,7 @@ export default fp(async (app) => {
     const token = bearerToken(request);
     request.session = token ? useSessionByToken(token) : null;
     if (!request.session) {
-      await reply.code(401).send({ message: 'Your session has expired. Please log in again.', code: SESSION_INVALID });
+      await reply.code(401).send({ message: 'Sua sessão expirou. Entre novamente.', code: SESSION_INVALID });
     }
   });
 });
