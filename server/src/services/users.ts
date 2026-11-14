@@ -1,4 +1,5 @@
 import type { PublicUser } from '@auction/shared';
+import { saveStore } from '../persistence';
 import { nextId, store, type UserRecord } from '../store';
 
 export class EmailTakenError extends Error {}
@@ -6,7 +7,12 @@ export class EmailTakenError extends Error {}
 /** Emails identify accounts (RF01), so they're compared trimmed and case-insensitively. */
 export const normalizeEmail = (email: string) => email.trim().toLowerCase();
 
-const toPublicUser = ({ id, name, email }: UserRecord): PublicUser => ({ id, name, email });
+const toPublicUser = ({ id, name, email, createdAt }: UserRecord): PublicUser => ({
+  id,
+  name,
+  email,
+  createdAt: new Date(createdAt).toISOString(),
+});
 
 export function findUserByEmail(email: string): (PublicUser & { passwordHash: string }) | undefined {
   const id = store.userIdsByEmail.get(normalizeEmail(email));
@@ -17,6 +23,22 @@ export function findUserByEmail(email: string): (PublicUser & { passwordHash: st
 export function findUserById(id: number): PublicUser | undefined {
   const user = store.users.get(id);
   return user && toPublicUser(user);
+}
+
+export function getPasswordHash(id: number): string | undefined {
+  return store.users.get(id)?.passwordHash;
+}
+
+export function updateUserName(id: number, name: string): PublicUser {
+  const user = store.users.get(id)!;
+  user.name = name;
+  saveStore();
+  return toPublicUser(user);
+}
+
+export function updatePasswordHash(id: number, passwordHash: string) {
+  store.users.get(id)!.passwordHash = passwordHash;
+  saveStore();
 }
 
 /**
@@ -30,5 +52,6 @@ export function createUser(data: { name: string; email: string; passwordHash: st
   const user: UserRecord = { id: nextId('user'), name: data.name, email, passwordHash: data.passwordHash, createdAt: Date.now() };
   store.users.set(user.id, user);
   store.userIdsByEmail.set(email, user.id);
+  saveStore();
   return toPublicUser(user);
 }

@@ -4,3 +4,6 @@ build
 .svelte-kit
 .env
 requisitos.md
+
+# Saved data and uploaded photos (VM disk storage)
+server/data/

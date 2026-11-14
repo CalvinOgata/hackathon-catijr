@@ -1,8 +1,16 @@
-import type { AuthResponse, PublicUser } from '@auction/shared';
-import type { FastifyInstance } from 'fastify';
-import { hashPassword, verifyPassword } from '../services/passwords';
+import {
+  DISPLAY_NAME_LENGTH,
+  normalizeDisplayName,
+  PASSWORD_LENGTH,
+  passwordProblems,
+  type AuthResponse,
+  type PublicUser,
+} from '@auction/shared';
+import type { FastifyInstance, FastifyReply } from 'fastify';
+import { cancelAttempt, finishAttempt, lockedMessage, pruneLoginAttempts, remainingMessage, startAttempt } from '../services/loginAttempts';
+import { hashForMissingUser, hashPassword, verifyPassword } from '../services/passwords';
 import { createSession, deleteSession } from '../services/sessions';
-import { createUser, EmailTakenError, findUserByEmail, findUserById } from '../services/users';
+import { createUser, EmailTakenError, findUserByEmail, findUserById, normalizeEmail } from '../services/users';
 
 interface SignupBody {
   name: string;
@@ -12,8 +20,6 @@ interface SignupBody {
 
 type LoginBody = Omit<SignupBody, 'name'>;
 
-const NAME_LENGTH = { min: 2, max: 60 };
-
 const emailSchema = { type: 'string', format: 'email', maxLength: 254 } as const;
 
 const signupSchema = {
@@ -21,9 +27,9 @@ const signupSchema = {
   required: ['name', 'email', 'password'],
   additionalProperties: false,
   properties: {
-    name: { type: 'string', maxLength: 200 }, // real limits are checked after trimming
+    name: { type: 'string', maxLength: 200 }, // real limits are checked after normalizing
     email: emailSchema,
-    password: { type: 'string', minLength: 8, maxLength: 128 },
+    password: { type: 'string', maxLength: PASSWORD_LENGTH.max }, // full policy checked below
   },
 } as const;
 
@@ -33,18 +39,40 @@ const loginSchema = {
   additionalProperties: false,
   properties: {
     email: emailSchema,
-    password: { type: 'string', minLength: 1, maxLength: 128 },
+    password: { type: 'string', minLength: 1, maxLength: PASSWORD_LENGTH.max },
   },
 } as const;
 
 const startSession = (user: PublicUser): AuthResponse => ({ token: createSession(user.id), user });
 
+/** Returns an error message when the display name is out of bounds. */
+export function displayNameProblem(name: string): string | null {
+  return name.length < DISPLAY_NAME_LENGTH.min || name.length > DISPLAY_NAME_LENGTH.max
+    ? `O nome de exibição deve ter de ${DISPLAY_NAME_LENGTH.min} a ${DISPLAY_NAME_LENGTH.max} caracteres`
+    : null;
+}
+
+/** Returns an error message when the password breaks the policy. */
+export function passwordProblem(password: string): string | null {
+  const problems = passwordProblems(password);
+  return problems.length ? `A senha precisa ter: ${problems.map((p) => p.toLowerCase()).join(', ')}` : null;
+}
+
+export function sendLocked(reply: FastifyReply, retryAfterMs: number) {
+  return reply
+    .code(429)
+    .header('Retry-After', Math.ceil(retryAfterMs / 1000))
+    .send({ message: lockedMessage(retryAfterMs) });
+}
+
 export default async function authRoutes(app: FastifyInstance) {
+  const prune = setInterval(pruneLoginAttempts, 60_000);
+  app.addHook('onClose', async () => clearInterval(prune));
+
   app.post<{ Body: SignupBody }>('/signup', { schema: { body: signupSchema } }, async (request, reply) => {
-    const name = request.body.name.trim().replace(/\s+/g, ' ');
-    if (name.length < NAME_LENGTH.min || name.length > NAME_LENGTH.max) {
-      return reply.code(400).send({ message: `O nome de exibição deve ter de ${NAME_LENGTH.min} a ${NAME_LENGTH.max} caracteres` });
-    }
+    const name = normalizeDisplayName(request.body.name);
+    const problem = displayNameProblem(name) ?? passwordProblem(request.body.password);
+    if (problem) return reply.code(400).send({ message: problem });
 
     try {
       const user = createUser({ name, email: request.body.email, passwordHash: await hashPassword(request.body.password) });
@@ -58,10 +86,24 @@ export default async function authRoutes(app: FastifyInstance) {
   });
 
   app.post<{ Body: LoginBody }>('/login', { schema: { body: loginSchema } }, async (request, reply) => {
-    const user = findUserByEmail(request.body.email);
+    const email = normalizeEmail(request.body.email);
 
-    if (!user || !(await verifyPassword(request.body.password, user.passwordHash))) {
-      return reply.code(401).send({ message: 'E-mail ou senha inválidos' });
+    const start = startAttempt(email);
+    if (!start.allowed) return sendLocked(reply, start.retryAfterMs);
+
+    const user = findUserByEmail(email);
+    let valid: boolean;
+    try {
+      valid = await verifyPassword(request.body.password, user?.passwordHash ?? (await hashForMissingUser()));
+    } catch (err) {
+      cancelAttempt(email); // a server error is not a wrong password
+      throw err;
+    }
+
+    const outcome = finishAttempt(email, valid && !!user);
+    if (!user || !valid) {
+      if (outcome.locked) return sendLocked(reply, outcome.retryAfterMs);
+      return reply.code(401).send({ message: `E-mail ou senha inválidos. ${remainingMessage(outcome.remaining)}` });
     }
 
     const { passwordHash: _, ...publicUser } = user;

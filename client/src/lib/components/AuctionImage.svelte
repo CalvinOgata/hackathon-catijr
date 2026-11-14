@@ -2,28 +2,30 @@
   import type { Auction } from '@auction/shared';
 
   interface Props {
-    auction: Pick<Auction, 'id' | 'title' | 'imageUrl'>;
+    auction: Pick<Auction, 'id' | 'title'>;
+    /** The photo to show; a colored placeholder is shown if missing or broken. */
+    src: string | undefined;
     alt?: string;
     class?: string;
     loading?: 'lazy' | 'eager';
   }
 
-  let { auction, alt = '', class: className = '', loading = 'eager' }: Props = $props();
+  let { auction, src, alt = '', class: className = '', loading = 'eager' }: Props = $props();
 
   // Keyed by URL so the flag resets when the component is reused for another auction
   let failedSrc = $state<string | null>(null);
-  const failed = $derived(failedSrc === auction.imageUrl);
+  const failed = $derived(failedSrc === src);
 
   // Stable color per auction for the placeholder
   const hue = $derived((auction.id * 47) % 360);
 </script>
 
-{#if failed || !auction.imageUrl}
+{#if failed || !src}
   <div class="placeholder {className}" style:--hue={hue} role={alt ? 'img' : undefined} aria-label={alt || undefined}>
     <span>{auction.title.charAt(0)}</span>
   </div>
 {:else}
-  <img class={className} src={auction.imageUrl} {alt} {loading} onerror={() => (failedSrc = auction.imageUrl)} />
+  <img class={className} {src} {alt} {loading} onerror={() => (failedSrc = src ?? null)} />
 {/if}
 
 <style>

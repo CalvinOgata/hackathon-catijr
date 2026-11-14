@@ -1,8 +1,10 @@
 import { buildApp } from './app';
 import { config } from './config';
+import { loadStore } from './persistence';
 import { seed } from './seed';
 
-await seed();
+// Saved data from the VM's disk; sample data only on the very first start
+if (!loadStore()) await seed();
 const app = await buildApp();
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
