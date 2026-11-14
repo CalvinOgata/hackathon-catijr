@@ -18,7 +18,10 @@ export class AuctionRoom {
   error = $state<string | null>(null);
   /** Fresher than listing data: updated with every bid in the room. */
   auction = $state<Auction | null>(null);
+  /** Newest first. The newest bid is always the leader's: every accepted bid takes the lead. */
   bids = $state<Bid[]>([]);
+  /** The `bidderTag` of the logged-in user's bids in this auction (RF09: bidders aren't identified by id). */
+  viewerTag = $state<string | null>(null);
 
   /**
    * RF25: role of this connection in the room.
@@ -103,6 +106,7 @@ export class AuctionRoom {
         this.auction = auction;
         this.bids = recentBids;
         this.mode = result.mode;
+        this.viewerTag = result.viewerTag;
         this.joined = true;
         this.error = null;
       } else {
@@ -113,6 +117,15 @@ export class AuctionRoom {
       if (!this.#left) this.error = 'Não foi possível acessar a sala do leilão. Tentaremos de novo quando a conexão voltar…';
     }
   };
+
+  /** The current leader's latest bid, or null without bids (or before joining). */
+  get leader(): Bid | null {
+    return this.auction?.bidCount ? (this.bids[0] ?? null) : null;
+  }
+
+  isMine(bid: Bid | null): boolean {
+    return bid !== null && bid.bidderTag === this.viewerTag;
+  }
 
   #onUpdated = (auction: Auction) => {
     if (auction.id === this.auctionId && this.auction) this.auction = auction;

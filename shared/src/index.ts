@@ -87,7 +87,10 @@ export interface Auction {
   photos: string[];
   startingPrice: number;
   currentPrice: number;
+  /** Increment at the current price (RF14), computed by the server from the table below. */
   minIncrement: number;
+  /** The lowest amount the next bid can have (RF14), computed by the server; screens only display it. */
+  minBid: number;
   bidCount: number;
   featured: boolean;
   sellerId: number;
@@ -96,8 +99,7 @@ export interface Auction {
   endsAt: string; // ISO date
   /** Set when the seller cancelled it (RF08). Cancelled auctions are kept, never deleted. */
   cancelledAt: string | null; // ISO date
-  highestBidderId: number | null;
-  highestBidderName: string | null;
+  // No bidder information here: listings are public. Who bid is only shown inside the room (RF04, RF09).
 }
 
 /** The five states an auction can be in (RN01). */
@@ -131,8 +133,14 @@ export interface Bid {
   id: number;
   auctionId: number;
   amount: number;
-  bidderId: number;
-  bidderName: string; // masked (RF09)
+  /** Masked (RF09), e.g. "Carla V.". */
+  bidderName: string;
+  /**
+   * Opaque tag for the bidder, the same for all their bids in this auction and different in
+   * every other one, so it can't be used to follow someone across auctions or match them to
+   * a seller. Compare it with `viewerTag` from `room:join` to tell which bids are yours.
+   */
+  bidderTag: string;
   createdAt: string; // ISO date
 }
 
@@ -162,7 +170,6 @@ export interface CreateAuctionFields {
   description: string;
   category: string;
   startingPrice: number;
-  minIncrement: number;
   /** ISO date; omitted means "as soon as allowed". */
   startsAt?: string;
   durationMinutes: number;
@@ -177,6 +184,9 @@ export type BidFailureCode =
   | typeof SESSION_INVALID
   | 'RATE_LIMITED'
   | 'BELOW_MINIMUM'
+  /** Bids are only accepted from inside the auction's room (RF10). */
+  | 'NOT_IN_ROOM'
+  /** Not live: scheduled, over or cancelled. */
   | 'NOT_IN_PROGRESS'
   | 'SELF_BID'
   | 'ALREADY_LEADER'
@@ -189,7 +199,17 @@ export type BidFailure = {
   currentMinBid?: number;
 };
 
-export type BidResult = { ok: true; auction?: Auction; bid?: Bid } | BidFailure;
+/**
+ * `bid` is the accepted bid. When the same bid is sent again (same `idempotencyKey`), it's the
+ * original one and nothing new is created (RF12); `auction` is always the current state.
+ */
+export type BidResult = { ok: true; auction: Auction; bid: Bid } | BidFailure;
+
+/** The highest bid accepted, in cents (R$ 100.000.000,00, the highest starting price), so amounts stay exact. */
+export const MAX_BID = 100_000_000_00;
+
+/** Max length of a bid's `idempotencyKey`. */
+export const IDEMPOTENCY_KEY_MAX_LENGTH = 100;
 
 /** RF25: whether a user joined a room as a bidder (participant) or a viewer (spectator). */
 export type RoomMode = 'participant' | 'spectator';
@@ -211,6 +231,8 @@ export interface RoomPresence {
   /** Number of connections currently in the spectator room (view only). */
   spectators: number;
 }
+/** `viewerTag`: the `bidderTag` your bids have in this auction. */
+export type JoinRoomResult = { ok: true; auction: AuctionDetail; viewerTag: string } | Failure;
 
 export interface ServerToClientEvents {
   /** Public: a new listing was published. */
@@ -231,7 +253,11 @@ export interface ClientToServerEvents {
   /** RF25: promote from spectator to participant without leaving the room. */
   'room:upgrade': (auctionId: number, ack: (result: JoinRoomResult) => void) => void;
   /** RF25: leave both the participant and spectator rooms for this auction. */
+  /** Anyone: the server's current time (epoch ms), so countdowns follow the server's clock (RF16). */
+  'clock:sync': (ack: (serverNow: number) => void) => void;
+  'room:join': (auctionId: number, ack: (result: JoinRoomResult) => void) => void;
   'room:leave': (auctionId: number) => void;
+  /** `idempotencyKey`: one per bid intent, reused when re-sending it (RF12). */
   'bid:place': (
     payload: { auctionId: number; amount: number; idempotencyKey?: string },
     ack: (result: BidResult) => void,

@@ -1,8 +1,9 @@
 import { minNextBid, SESSION_INVALID, type ClientToServerEvents, type Failure, type RoomMode, type ServerToClientEvents } from '@auction/shared';
+import { IDEMPOTENCY_KEY_MAX_LENGTH, SESSION_INVALID, type BidFailure, type ClientToServerEvents, type Failure, type ServerToClientEvents } from '@auction/shared';
 import type { FastifyInstance } from 'fastify';
 import { Server, type Socket } from 'socket.io';
 import { config } from './config';
-import { BidError, getAuction, getAuctionDetail, placeBid } from './services/auctions';
+import { BidError, bidderTag, getAuction, getAuctionDetail, placeBid } from './services/auctions';
 import { deleteExpiredSessions, isSessionActive, useSessionById, useSessionByToken, type Session } from './services/sessions';
 
 interface SocketData {
@@ -74,6 +75,8 @@ function broadcastPresence(io: IO, auctionId: number) {
   // Emit to both rooms (participants room + spectators room)
   io.to(roomName(auctionId)).to(spectatorRoom(auctionId)).emit('room:presence', payload);
 }
+const isIdempotencyKey = (value: unknown): value is string =>
+  typeof value === 'string' && value.length > 0 && value.length <= IDEMPOTENCY_KEY_MAX_LENGTH;
 
 export function registerSocket(app: FastifyInstance) {
   const io: IO = new Server(app.server, { cors: { origin: config.corsOrigin } });
@@ -98,6 +101,16 @@ export function registerSocket(app: FastifyInstance) {
         endSession(socket, io);
         return ack(sessionFailure);
       }
+    // The server's clock is the one that counts (RF16); browsers use this to correct theirs
+    socket.on('clock:sync', (ack) => {
+      if (typeof ack === 'function') ack(Date.now());
+    });
+
+    // Entering an auction room requires login (RF04)
+    socket.on('room:join', (auctionId, ack) => {
+      if (typeof ack !== 'function') return;
+      const session = requireSession(socket);
+      if (!session) return ack(sessionFailure);
       if (!isAuctionId(auctionId)) return ack({ ok: false, error: 'Leilão inválido' });
 
       const auction = getAuctionDetail(auctionId);
@@ -135,6 +148,7 @@ export function registerSocket(app: FastifyInstance) {
 
       broadcastPresence(io, auctionId);
       ack({ ok: true, auction, mode: 'participant' });
+      ack({ ok: true, auction, viewerTag: bidderTag(auctionId, session.user.id) });
     });
 
     // RF25: on explicit leave, clean up both rooms (participant and spectator) and update presence.
@@ -148,27 +162,37 @@ export function registerSocket(app: FastifyInstance) {
     socket.on('bid:place', (payload, ack) => {
       if (typeof ack !== 'function') return;
 
+      const { auctionId, amount, idempotencyKey } = payload ?? {};
+      // RF10: every refusal tells the reason and the current minimum (when the auction exists)
+      const refuse = (failure: Omit<BidFailure, 'ok' | 'currentMinBid'>) =>
+        ack({ ok: false, ...failure, currentMinBid: (isAuctionId(auctionId) && getAuction(auctionId)?.minBid) || undefined });
+
       const session = requireSession(socket);
       if (!session) {
         endSession(socket, io);
         return ack(sessionFailure);
       }
+      if (!session) return refuse(sessionFailure);
 
-      const { auctionId, amount, idempotencyKey } = payload ?? {};
       if (!isAuctionId(auctionId) || !Number.isInteger(amount) || amount <= 0) {
-        return ack({ ok: false, error: 'Lance inválido', code: 'INVALID_BID' });
+        return refuse({ error: 'Lance inválido', code: 'INVALID_BID' });
+      }
+      if (idempotencyKey !== undefined && !isIdempotencyKey(idempotencyKey)) {
+        return refuse({ error: 'Lance inválido', code: 'INVALID_BID' });
       }
       if (!socket.rooms.has(roomName(auctionId))) {
-        return ack({ ok: false, error: 'Entre na sala do leilão para dar lances', code: 'NOT_IN_PROGRESS' });
+        return refuse({ error: 'Entre na sala do leilão para dar lances', code: 'NOT_IN_ROOM' });
       }
 
       try {
         const result = placeBid(auctionId, session.user, amount, idempotencyKey);
-        // Listings are public, but who bid is only shared with the room (RF09, RF11)
+        // Listings are public, but who bid is only shared with the room (RF09, RF11).
+        // A re-sent bid (RF12) changed nothing, so there's nothing to announce.
         if (!result.isReplay) {
           io.emit('auction:updated', result.auction);
           // Broadcast bids to both participant and spectator rooms
           io.to(roomName(auctionId)).to(spectatorRoom(auctionId)).emit('room:bid', result);
+          io.to(roomName(auctionId)).emit('room:bid', { auction: result.auction, bid: result.bid });
         }
         ack({ ok: true, auction: result.auction, bid: result.bid });
       } catch (err) {
@@ -181,9 +205,7 @@ export function registerSocket(app: FastifyInstance) {
           });
         }
         app.log.error(err, 'Failed to place bid');
-        const auction = getAuction(auctionId);
-        const minVal = auction ? minNextBid(auction) : 0;
-        ack({ ok: false, error: 'Algo deu errado. Tente novamente.', currentMinBid: minVal });
+        refuse({ error: 'Algo deu errado. Tente novamente.' });
       }
     });
   });
