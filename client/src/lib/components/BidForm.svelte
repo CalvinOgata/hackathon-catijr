@@ -3,10 +3,8 @@
   import { untrack } from 'svelte';
   import { clock } from '#lib/clock.svelte.ts';
   import { formatMoney } from '#lib/format.ts';
-  import type { AuctionRoom } from '#lib/room.svelte.ts';
   import { socket } from '#lib/socket.svelte.ts';
 
-  let { auction, room }: { auction: Auction; room: AuctionRoom | null } = $props();
   /** `leading`: the logged-in user has the highest bid (known from the room). */
   let { auction, leading }: { auction: Auction; leading: boolean } = $props();
 
@@ -173,19 +171,6 @@
     }
 
     submitting = true;
-    feedback = null;
-
-    // RF25: upgrade from spectator to participant before placing a bid
-    if (room && room.mode === 'spectator') {
-      const upgraded = await room.upgrade();
-      if (!upgraded) {
-        feedback = { kind: 'error', text: room.error ?? 'Não foi possível entrar como participante. Tente novamente.' };
-        submitting = false;
-        return;
-      }
-    }
-
-    const idempotencyKey = generateIdempotencyKey();
     const bidCents = cents(amount);
 
     try {

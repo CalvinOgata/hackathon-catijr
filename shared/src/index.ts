@@ -215,10 +215,10 @@ export const IDEMPOTENCY_KEY_MAX_LENGTH = 100;
 export type RoomMode = 'participant' | 'spectator';
 
 /**
- * Returned by room:join and room:upgrade.
- * Includes `mode` so the client knows which role the server assigned (RF25).
+ * Returned by room:join and room:upgrade. `mode` is the role the server gave (a seller always
+ * watches their own auction); `viewerTag` is the `bidderTag` your bids have in this auction.
  */
-export type JoinRoomResult = { ok: true; auction: AuctionDetail; mode: RoomMode } | Failure;
+export type JoinRoomResult = { ok: true; auction: AuctionDetail; mode: RoomMode; viewerTag: string } | Failure;
 
 /**
  * Live headcount emitted to all room members whenever someone enters, leaves,
@@ -226,13 +226,11 @@ export type JoinRoomResult = { ok: true; auction: AuctionDetail; mode: RoomMode 
  */
 export interface RoomPresence {
   auctionId: number;
-  /** Number of connections currently in the participant room (can place bids). */
+  /** People who can bid (several tabs of one user count once). */
   participants: number;
-  /** Number of connections currently in the spectator room (view only). */
+  /** People only watching (someone also participating in another tab isn't counted here). */
   spectators: number;
 }
-/** `viewerTag`: the `bidderTag` your bids have in this auction. */
-export type JoinRoomResult = { ok: true; auction: AuctionDetail; viewerTag: string } | Failure;
 
 export interface ServerToClientEvents {
   /** Public: a new listing was published. */
@@ -248,14 +246,13 @@ export interface ServerToClientEvents {
 }
 
 export interface ClientToServerEvents {
-  /** RF04 / RF25: join as spectator (default) or participant. Login is required either way. */
+  /** Anyone: the server's current time (epoch ms), so countdowns follow the server's clock (RF16). */
+  'clock:sync': (ack: (serverNow: number) => void) => void;
+  /** RF04 / RF25: join as spectator or participant. Login is required either way. */
   'room:join': (auctionId: number, mode: RoomMode, ack: (result: JoinRoomResult) => void) => void;
   /** RF25: promote from spectator to participant without leaving the room. */
   'room:upgrade': (auctionId: number, ack: (result: JoinRoomResult) => void) => void;
-  /** RF25: leave both the participant and spectator rooms for this auction. */
-  /** Anyone: the server's current time (epoch ms), so countdowns follow the server's clock (RF16). */
-  'clock:sync': (ack: (serverNow: number) => void) => void;
-  'room:join': (auctionId: number, ack: (result: JoinRoomResult) => void) => void;
+  /** Leaves the auction's room, whichever the mode. */
   'room:leave': (auctionId: number) => void;
   /** `idempotencyKey`: one per bid intent, reused when re-sending it (RF12). */
   'bid:place': (
