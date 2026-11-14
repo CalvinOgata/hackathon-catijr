@@ -1,4 +1,4 @@
-import { createReadStream, existsSync } from 'node:fs';
+import { createReadStream, statSync } from 'node:fs';
 import type { FastifyInstance } from 'fastify';
 import { photoMimeType, photoPath } from '../services/photos';
 
@@ -7,10 +7,12 @@ import { photoMimeType, photoPath } from '../services/photos';
 export default async function photoRoutes(app: FastifyInstance) {
   app.get<{ Params: { name: string } }>('/:name', async (request, reply) => {
     const path = photoPath(request.params.name);
-    if (!path || !existsSync(path)) return reply.code(404).send({ message: 'Foto não encontrada' });
+    const size = path ? statSync(path, { throwIfNoEntry: false })?.size : undefined;
+    if (!path || size === undefined) return reply.code(404).send({ message: 'Foto não encontrada' });
 
     return reply
       .type(photoMimeType(request.params.name))
+      .header('Content-Length', size) // lets the browser show progress and reuse the connection
       .header('Cache-Control', 'public, max-age=31536000, immutable') // names are random and never reused
       .header('X-Content-Type-Options', 'nosniff')
       .send(createReadStream(path));
