@@ -4,15 +4,19 @@ import {
   calculateMinIncrement,
   canCancel,
   DELETED_ACCOUNT_NAME,
+  isOpenStatus,
+  listingOrder,
   MAX_BID,
   maskBidderName,
   minNextBid,
   type AccountDeletionBlockers,
   type Auction,
   type AuctionDetail,
+  type AuctionPage,
   type Bid,
   type BidFailureCode,
 } from '@auction/shared';
+import { config } from '../config';
 import { saveStore } from '../persistence';
 import { bidKey, nextId, store, type AuctionRecord, type BidRecord, type ItemRecord } from '../store';
 
@@ -37,6 +41,7 @@ function toAuction(record: AuctionRecord): Auction {
     sellerName: store.users.get(record.sellerId)!.name,
     startsAt: new Date(record.startsAt).toISOString(),
     endsAt: new Date(record.endsAt).toISOString(),
+    originalEndsAt: new Date(record.originalEndsAt).toISOString(),
     cancelledAt: record.cancelledAt === null ? null : new Date(record.cancelledAt).toISOString(),
   };
 }
@@ -49,9 +54,6 @@ const TAG_KEY = randomBytes(32);
 
 export const bidderTag = (auctionId: number, userId: number) =>
   createHmac('sha256', TAG_KEY).update(`${auctionId}:${userId}`).digest('base64url').slice(0, 16);
-
-/** Scheduled or live (not cancelled, not over). */
-const isActive = (record: AuctionRecord, now: number) => ['scheduled', 'live'].includes(auctionStatus(toAuction(record), now));
 
 function toBid(record: BidRecord): Bid {
   const user = store.users.get(record.userId)!;
@@ -69,18 +71,32 @@ function toBid(record: BidRecord): Bid {
 /** Lowercase without accents, so "jacaranda" finds "jacarandá". */
 const searchable = (text: string) => text.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase();
 
-/** Scheduled and live auctions first (ending soonest on top), then ended and cancelled ones. */
-export function listAuctions(search?: string): Auction[] {
+/**
+ * The public listing (RF20): only scheduled and live auctions, live ones ending soonest first,
+ * then scheduled ones starting soonest (see `listingOrder`), a page at a time. The search looks
+ * in the name, description and category, ignoring accents and case; the category must match
+ * exactly. Ended and cancelled auctions stay reachable by their link.
+ */
+export function listAuctions({ search, category, offset = 0, limit }: { search?: string; category?: string; offset?: number; limit: number }): AuctionPage {
   const now = Date.now();
   const term = search && searchable(search);
-  return [...store.auctions.values()]
-    .filter((a) => {
-      if (!term) return true;
-      const item = store.items.get(a.itemId)!;
-      return [item.title, item.description, item.category].some((field) => searchable(field).includes(term));
+  const matching = [...store.auctions.values()]
+    .filter((record) => {
+      const item = store.items.get(record.itemId)!;
+      if (category && item.category !== category) return false;
+      return !term || [item.title, item.description, item.category].some((field) => searchable(field).includes(term));
     })
-    .sort((a, b) => Number(isActive(b, now)) - Number(isActive(a, now)) || a.endsAt - b.endsAt)
-    .map(toAuction);
+    .map(toAuction)
+    .filter((auction) => isOpenStatus(auctionStatus(auction, now)))
+    .sort((a, b) => listingOrder(a, b, now));
+  return { auctions: matching.slice(offset, offset + limit), total: matching.length };
+}
+
+/** Featured auctions still open, for the home page carousel; the first open one if none is. */
+export function featuredAuctions(max: number): Auction[] {
+  const { auctions } = listAuctions({ limit: Number.MAX_SAFE_INTEGER });
+  const featured = auctions.filter((auction) => auction.featured);
+  return (featured.length ? featured : auctions).slice(0, featured.length ? max : 1);
 }
 
 export function getAuction(id: number): Auction | undefined {
@@ -129,7 +145,10 @@ export function createAuction(sellerId: number, input: NewAuction): Auction {
     featured: input.featured ?? false,
     startsAt: input.startsAt,
     endsAt: input.startsAt + input.durationMinutes * 60 * 1000,
+    originalEndsAt: input.startsAt + input.durationMinutes * 60 * 1000,
     cancelledAt: null,
+    openedAt: null,
+    closedAt: null,
     createdAt: now,
   };
 
@@ -216,6 +235,20 @@ const lastAttemptByUser = new Map<number, { at: number; key: string | undefined 
 
 const money = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 
+const MINUTE = 60 * 1000;
+
+/**
+ * RF15: a bid leaving less than the window on the clock moves the end to one window after the
+ * bid, but never more than the maximum past the original end. Checked after the bid was
+ * accepted, so it was placed before the end (RF16) and the auction can't close in between.
+ */
+function extendedEnd(auction: AuctionRecord, bidAt: number): number {
+  const { windowMinutes, maxMinutes } = config.listing.extension;
+  if (auction.endsAt - bidAt >= windowMinutes * MINUTE) return auction.endsAt;
+  const latest = auction.originalEndsAt + maxMinutes * MINUTE;
+  return Math.max(auction.endsAt, Math.min(bidAt + windowMinutes * MINUTE, latest));
+}
+
 /**
  * Validates and records a bid according to RF10 to RF14.
  * It runs synchronously from check to write, so no other bid on the same auction can slip in between (RF11).
@@ -228,6 +261,7 @@ export function placeBid(
   user: { id: number; name: string },
   amount: number,
   idempotencyKey?: string,
+  now = Date.now(), // only the sample data passes another time
 ): { auction: Auction; bid: Bid; isReplay?: boolean } {
   const auction = store.auctions.get(auctionId);
   if (!auction) throw new BidError('Leilão não encontrado', 0, 'INVALID_BID');
@@ -239,7 +273,6 @@ export function placeBid(
   const original = key && store.bidsByKey.get(key);
   if (original) return { auction: toAuction(auction), bid: toBid(original), isReplay: true };
 
-  const now = Date.now();
   const currentAuction = toAuction(auction);
   const minimum = currentAuction.minBid;
 
@@ -280,12 +313,13 @@ export function placeBid(
 
   const bid: BidRecord = { id: nextId('bid'), auctionId, userId: user.id, amount, createdAt: now, idempotencyKey: idempotencyKey ?? null };
   const bids = store.bidsByAuction.get(auctionId)!;
-  const before = { currentPrice: auction.currentPrice, highestBidderId: auction.highestBidderId, bidCount: auction.bidCount };
+  const before = { currentPrice: auction.currentPrice, highestBidderId: auction.highestBidderId, bidCount: auction.bidCount, endsAt: auction.endsAt };
   bids.push(bid);
   if (key) store.bidsByKey.set(key, bid);
   auction.currentPrice = amount;
   auction.highestBidderId = user.id;
   auction.bidCount++;
+  auction.endsAt = extendedEnd(auction, now);
   try {
     saveStore(); // on disk before anyone is told about it (RF11)
   } catch (err) {

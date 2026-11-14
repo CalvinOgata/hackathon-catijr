@@ -6,6 +6,7 @@
   import { auth } from '#lib/auth.svelte.ts';
   import { clock } from '#lib/clock.svelte.ts';
   import { formatDateTime, formatMoney } from '#lib/format.ts';
+  import { loadRules } from '#lib/rules.ts';
 
   const MINUTE = 60 * 1000;
   const DURATION_PRESETS = [3, 5, 10, 15, 30, 60, 3 * 60, 6 * 60, 12 * 60, 24 * 60, 3 * 24 * 60, 7 * 24 * 60];
@@ -18,8 +19,7 @@
   // The limits come from the server (RF06), so the form never disagrees with it
   let rules = $state<ListingRules | null>(null);
   let rulesError = $state<string | null>(null);
-  api
-    .get<ListingRules>('/auctions/rules')
+  loadRules()
     .then((result) => {
       rules = result;
       category = result.categories[0]!;

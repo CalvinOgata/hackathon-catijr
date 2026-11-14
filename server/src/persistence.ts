@@ -43,6 +43,10 @@ export function loadStore(): boolean {
   for (const auction of data.auctions) {
     auction.cancelledAt ??= null; // saved before cancelling existed
     delete (auction as { minIncrement?: number }).minIncrement; // sellers used to choose it; now it's the RF14 table
+    // Saved before RF15/RF17: never extended, and transitions not recorded yet (the job does it on start)
+    auction.originalEndsAt ??= auction.endsAt;
+    auction.openedAt ??= null;
+    auction.closedAt ??= null;
     store.auctions.set(auction.id, auction);
     store.bidsByAuction.set(auction.id, []);
   }

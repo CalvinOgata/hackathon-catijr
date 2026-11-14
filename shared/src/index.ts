@@ -96,7 +96,10 @@ export interface Auction {
   sellerId: number;
   sellerName: string;
   startsAt: string; // ISO date
+  /** The end in force, including extensions by late bids (RF15). */
   endsAt: string; // ISO date
+  /** The end as scheduled; `endsAt` is later when late bids extended it (RF15). */
+  originalEndsAt: string; // ISO date
   /** Set when the seller cancelled it (RF08). Cancelled auctions are kept, never deleted. */
   cancelledAt: string | null; // ISO date
   // No bidder information here: listings are public. Who bid is only shown inside the room (RF04, RF09).
@@ -121,6 +124,30 @@ export function auctionStatus(auction: StatusFields, now: number): AuctionStatus
   if (now < Date.parse(auction.startsAt)) return 'scheduled';
   if (now < Date.parse(auction.endsAt)) return 'live';
   return auction.bidCount > 0 ? 'sold' : 'unsold';
+}
+
+/** Scheduled or live: the auctions the public listing shows (RF20). */
+export const isOpenStatus = (status: AuctionStatus) => status === 'scheduled' || status === 'live';
+
+/**
+ * Team decision (RF20): the order of the public listing. Live auctions first, ending soonest on
+ * top (they're the ones that need attention now), then scheduled ones, starting soonest.
+ */
+export function listingOrder(a: StatusFields, b: StatusFields, now: number): number {
+  const key = (auction: StatusFields) =>
+    auctionStatus(auction, now) === 'live' ? [0, Date.parse(auction.endsAt)] : [1, Date.parse(auction.startsAt)];
+  const [groupA, timeA] = key(a);
+  const [groupB, timeB] = key(b);
+  return groupA - groupB || timeA - timeB;
+}
+
+/** Auctions per page of the public listing (RF20). */
+export const LISTING_PAGE_SIZE = 12;
+
+/** A page of the public listing, and how many auctions match in all. */
+export interface AuctionPage {
+  auctions: Auction[];
+  total: number;
 }
 
 /** RF08: the seller may cancel while it's scheduled, or live without any bid. */
@@ -149,8 +176,9 @@ export interface AuctionDetail extends Auction {
 }
 
 /**
- * Limits for creating an auction (RF05). The server owns them (see `server/src/config.ts`,
- * RF06) and publishes them at `GET /api/auctions/rules`, so the form always matches.
+ * Limits for creating an auction (RF05), and the extension rule (RF15). The server owns them
+ * (see `server/src/config.ts`, RF06) and publishes them at `GET /api/auctions/rules`, so the
+ * screens always match.
  */
 export interface ListingRules {
   categories: readonly string[];
@@ -162,6 +190,11 @@ export interface ListingRules {
   /** How far ahead the start can be scheduled. */
   leadMinutes: { min: number; max: number };
   durationMinutes: { min: number; max: number };
+  /**
+   * Team decision (RF15): a bid leaving less than `windowMinutes` on the clock moves the end to
+   * `windowMinutes` after the bid, up to `maxMinutes` past the original end in all.
+   */
+  extension: { windowMinutes: number; maxMinutes: number };
 }
 
 /** Text fields of the "create auction" form (sent as multipart, next to the `photos` files). */

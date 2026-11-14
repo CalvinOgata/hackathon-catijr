@@ -1,8 +1,8 @@
 import multipart from '@fastify/multipart';
-import type { ListingRules } from '@auction/shared';
+import { CATEGORIES, LISTING_PAGE_SIZE, type AuctionPage, type ListingRules } from '@auction/shared';
 import type { FastifyInstance } from 'fastify';
 import { config } from '../config';
-import { cancelAuction, CancelError, createAuction, getAuction, listAuctions } from '../services/auctions';
+import { cancelAuction, CancelError, createAuction, featuredAuctions, getAuction, listAuctions } from '../services/auctions';
 import { photoTooLargeMessage, tooManyPhotosMessage, validateListing } from '../services/listings';
 import { deletePhotos, savePhotos } from '../services/photos';
 
@@ -18,22 +18,34 @@ export default async function auctionRoutes(app: FastifyInstance) {
     },
   });
 
-  // The limits for creating an auction, so the form can show and pre-check them (RF06)
+  // The limits for creating an auction and the extension rule, so the screens can show them (RF06)
   app.get('/rules', async (): Promise<ListingRules> => rules);
 
-  // Listings are public (RF04). Bids and bidders are only visible inside a room (see socket.ts).
-  app.get<{ Querystring: { q?: string } }>(
+  // The public listing (RF04, RF20): scheduled and live auctions, a page at a time.
+  // Bids and bidders are only visible inside a room (see socket.ts).
+  app.get<{ Querystring: { q?: string; category?: string; offset?: number; limit?: number } }>(
     '/',
     {
       schema: {
         querystring: {
           type: 'object',
-          properties: { q: { type: 'string', maxLength: 100 } },
+          properties: {
+            q: { type: 'string', maxLength: 100 },
+            category: { type: 'string', enum: [...CATEGORIES] },
+            offset: { type: 'integer', minimum: 0, default: 0 },
+            limit: { type: 'integer', minimum: 1, maximum: 50, default: LISTING_PAGE_SIZE },
+          },
         },
       },
     },
-    async (request) => listAuctions(request.query.q?.trim() || undefined),
+    async (request): Promise<AuctionPage> => {
+      const { q, category, offset, limit } = request.query;
+      return listAuctions({ search: q?.trim() || undefined, category, offset, limit: limit ?? LISTING_PAGE_SIZE });
+    },
   );
+
+  // The home page carousel
+  app.get('/featured', async () => featuredAuctions(5));
 
   app.get<{ Params: { id: number } }>(
     '/:id',
