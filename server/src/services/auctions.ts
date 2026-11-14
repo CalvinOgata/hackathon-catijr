@@ -4,6 +4,7 @@ import {
   canCancel,
   maskBidderName,
   minNextBid,
+  type AccountDeletionBlockers,
   type Auction,
   type AuctionDetail,
   type Bid,
