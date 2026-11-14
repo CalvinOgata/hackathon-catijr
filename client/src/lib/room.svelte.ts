@@ -4,12 +4,17 @@ import { socket } from './socket.svelte.ts';
 // Several components may watch the same room (e.g. while navigating from the home
 // hero to the auction page), so only leave on the server when the last one is gone.
 const watchers = new Map<number, number>();
+/**
+ * This connection's role in each room (RF25), shared by every component watching it, and used
+ * to rejoin with the same role after reconnecting. Spectator until upgraded.
+ */
+const modes = $state<Record<number, RoomMode>>({});
 
 /**
  * Membership in an auction's live room. Entering requires login (RF04): only room
  * members receive bids with bidder names, and bids can only be placed from inside.
  *
- * RF25: users always enter as spectators; call `upgrade()` to become a participant.
+ * RF25: users enter as spectators; `upgrade()` makes them participants (who can bid).
  * Always call `leave()` when done.
  */
 export class AuctionRoom {
@@ -23,20 +28,11 @@ export class AuctionRoom {
   /** The `bidderTag` of the logged-in user's bids in this auction (RF09: bidders aren't identified by id). */
   viewerTag = $state<string | null>(null);
 
-  /**
-   * RF25: role of this connection in the room.
-   * - 'spectator': can receive bids and presence updates, but cannot place bids.
-   * - 'participant': full access, including bid placement.
-   * Starts as spectator on every join; call upgrade() to become a participant.
-   */
-  mode = $state<RoomMode>('spectator');
-  /** RF25: number of connections in the participant room right now. Updated via room:presence. */
+  /** RF25: people in the room who can bid, and people only watching. Updated via room:presence. */
   participants = $state(0);
-  /** RF25: number of connections in the spectator room right now. Updated via room:presence. */
   spectators = $state(0);
 
   #left = false;
-  #upgrading = false;
 
   constructor(auctionId: number) {
     this.auctionId = auctionId;
@@ -60,52 +56,51 @@ export class AuctionRoom {
     if (remaining > 0) watchers.set(this.auctionId, remaining);
     else {
       watchers.delete(this.auctionId);
+      delete modes[this.auctionId];
       if (socket.connected) socket.emit('room:leave', this.auctionId);
     }
   }
 
   /**
-   * RF25: promote this connection from spectator to participant without leaving the room.
-   * - No-op (returns true) if already a participant.
-   * - Guards against concurrent calls with #upgrading.
-   * - On success: updates mode, auction snapshot and bids.
-   * - On failure: sets this.error and returns false.
+   * RF25: 'spectator' receives bids and the headcount but can't bid; 'participant' can bid.
+   * A seller is always a spectator in their own auction.
    */
-  async upgrade(): Promise<boolean> {
-    if (this.mode === 'participant' || this.#upgrading || this.#left) return this.mode === 'participant';
-    this.#upgrading = true;
+  get mode(): RoomMode {
+    return modes[this.auctionId] ?? 'spectator';
+  }
+
+  /**
+   * RF25: makes this connection a participant without leaving the room.
+   * Returns null when done, or why it couldn't be done (the room itself stays as it was).
+   */
+  async upgrade(): Promise<string | null> {
+    if (this.mode === 'participant') return null;
+    if (this.#left) return 'Você saiu da sala do leilão.';
     try {
       const result = await socket.timeout(5000).emitWithAck('room:upgrade', this.auctionId);
-      if (this.#left) return false;
-      if (result.ok) {
-        const { recentBids, ...auction } = result.auction;
-        this.auction = auction;
-        this.bids = recentBids;
-        this.mode = 'participant';
-        this.error = null;
-        return true;
-      } else {
-        this.error = result.error;
-        return false;
-      }
+      if (!result.ok) return result.error;
+      if (this.#left) return null;
+      const { recentBids, ...auction } = result.auction;
+      this.auction = auction;
+      this.bids = recentBids;
+      this.viewerTag = result.viewerTag;
+      modes[this.auctionId] = result.mode;
+      return null;
     } catch {
-      if (!this.#left) this.error = 'Não foi possível entrar como participante. Tente novamente.';
-      return false;
-    } finally {
-      this.#upgrading = false;
+      return 'Não foi possível entrar como participante. Tente novamente.';
     }
   }
 
   #join = async () => {
     try {
-      // RF25: always enter as spectator; the user can upgrade explicitly.
-      const result = await socket.timeout(5000).emitWithAck('room:join', this.auctionId, 'spectator');
+      // RF25: spectator at first; after reconnecting, the role this connection had
+      const result = await socket.timeout(5000).emitWithAck('room:join', this.auctionId, this.mode);
       if (this.#left) return;
       if (result.ok) {
         const { recentBids, ...auction } = result.auction;
         this.auction = auction;
         this.bids = recentBids;
-        this.mode = result.mode;
+        modes[this.auctionId] = result.mode;
         this.viewerTag = result.viewerTag;
         this.joined = true;
         this.error = null;

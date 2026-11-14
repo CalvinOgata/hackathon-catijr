@@ -38,11 +38,12 @@
   const isSpectator = $derived(room?.joined === true && room?.mode === 'spectator');
 
   let upgrading = $state(false);
+  let upgradeError = $state<string | null>(null);
 
   async function handleUpgrade() {
     if (!room || upgrading) return;
     upgrading = true;
-    await room.upgrade();
+    upgradeError = await room.upgrade();
     upgrading = false;
   }
 
@@ -189,7 +190,7 @@
       {:else if scheduled}
         <p class="muted small">Os lances abrem quando o leilão começar.</p>
       {:else}
-        <!-- RF25: spectator upgrade prompt -->
+        <!-- RF25: spectators watch; becoming a participant (who can bid) doesn't leave the room -->
         {#if isSpectator && status === 'live'}
           <div class="spectator-gate">
             <p class="small"><strong>Você está assistindo como espectador.</strong></p>
@@ -197,15 +198,15 @@
             <button class="btn btn-primary full" onclick={handleUpgrade} disabled={upgrading}>
               {upgrading ? 'Entrando…' : '🎯 Participar do leilão'}
             </button>
+            {#if upgradeError}
+              <p class="field-error" role="alert">{upgradeError}</p>
+            {/if}
           </div>
         {:else}
           {#key auction.id}
-            <BidForm {auction} {room} />
+            <BidForm {auction} leading={isLeader} />
           {/key}
         {/if}
-        {#key auction.id}
-          <BidForm {auction} leading={isLeader} />
-        {/key}
       {/if}
 
       <section class="history">
