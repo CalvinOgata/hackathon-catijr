@@ -77,7 +77,7 @@
 
   <aside class="panel">
     <div class="stats">
-      <div>
+      <div class="current">
         <span class="label">{auction.bidCount ? 'Lance atual' : 'Preço inicial'}</span>
         {#key auction.currentPrice}
           <strong class="price" in:flash>{formatMoney(auction.currentPrice)}</strong>
@@ -317,12 +317,16 @@
     display: flex;
     flex-direction: column;
     gap: 20px;
+    min-width: 0;
+    container-type: inline-size;
   }
 
+  /* Narrow panel (desktop side column, phones): the price on its own row, then the minimum
+     bid and the countdown side by side. Wide panel (tablets): all three in one row. */
   .stats {
-    display: flex;
-    justify-content: space-between;
-    gap: 12px;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px 16px;
     padding: 16px;
     background: var(--surface-2);
     border-radius: 12px;
@@ -331,14 +335,33 @@
   .stats > div {
     display: flex;
     flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .current {
+    grid-column: 1 / -1;
   }
 
   .ends {
+    grid-column: -2;
     text-align: right;
+    align-items: flex-end;
   }
 
   .ends strong {
     font-size: 20px;
+    line-height: 1.2;
+  }
+
+  @container (min-width: 560px) {
+    .stats {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .current {
+      grid-column: auto;
+    }
   }
 
   .label {
@@ -353,7 +376,8 @@
     margin: 0 -4px;
     padding: 0 4px;
     border-radius: 6px;
-    font-size: 30px;
+    font-size: clamp(24px, 9cqi, 30px);
+    overflow-wrap: anywhere;
     line-height: 1.2;
     font-variant-numeric: tabular-nums;
   }
@@ -366,6 +390,8 @@
     font-size: 20px;
     line-height: 1.2;
     color: var(--accent);
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
   }
 
   .outcome {
@@ -505,7 +531,7 @@
 
   @media (max-width: 900px) {
     .hero {
-      grid-template-columns: 1fr;
+      grid-template-columns: minmax(0, 1fr);
       padding: 16px;
     }
 

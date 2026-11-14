@@ -4,6 +4,7 @@ import {
   calculateMinIncrement,
   canCancel,
   DELETED_ACCOUNT_NAME,
+  MAX_BID,
   maskBidderName,
   minNextBid,
   type AccountDeletionBlockers,
@@ -270,6 +271,9 @@ export function placeBid(
     throw new BidError('Você já tem o maior lance', minimum, 'ALREADY_LEADER');
   }
 
+  if (amount > MAX_BID) {
+    throw new BidError(`O lance pode ser de no máximo ${money.format(MAX_BID / 100)}`, minimum, 'INVALID_BID');
+  }
   if (amount < minimum) {
     throw new BidError(`O lance deve ser de no mínimo ${money.format(minimum / 100)}`, minimum, 'BELOW_MINIMUM');
   }

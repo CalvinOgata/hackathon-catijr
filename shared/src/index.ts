@@ -205,6 +205,9 @@ export type BidFailure = {
  */
 export type BidResult = { ok: true; auction: Auction; bid: Bid } | BidFailure;
 
+/** The highest bid accepted, in cents (R$ 100.000.000,00, the highest starting price), so amounts stay exact. */
+export const MAX_BID = 100_000_000_00;
+
 /** Max length of a bid's `idempotencyKey`. */
 export const IDEMPOTENCY_KEY_MAX_LENGTH = 100;
 
