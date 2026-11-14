@@ -60,12 +60,12 @@ The Makefile only wraps npm scripts, so `npm run dev`, `npm run build`, etc. sti
 | **RF05** · Create an auction with name, description, category, ≥ 3 photos, starting price, start time and duration. | "Anunciar item" form (`/sell`), sent as one multipart request; the server validates every field and photo before saving anything. The start is either "as soon as possible" or a chosen date/time, checked against the **server's** clock. Bids before the start are rejected. |
 | **RF08** · The seller cancels their own auction while scheduled or live without bids; nothing is deleted. | "Cancelar leilão" on the auction page (seller only, with a confirmation step). The server re-checks seller, state and bids; a cancelled auction keeps all its data and photos, is marked **Cancelado**, rejects bids and is announced live to listings and rooms. A bid and a cancellation arriving together can't both succeed: they run one after the other, so whichever comes first wins. |
 | **RF06** · Limits are easy to change (e.g. a demo auction that opens in 1 minute and lasts 3). | Every limit is in one place, `server/src/config.ts`; the time and photo limits can be overridden in `server/.env` without touching code. The form reads them from `GET /api/auctions/rules`, so it always matches the server. |
-| **RF09** · Live auction room with real-time updates and masked leader identity. | Socket.io room broadcasts every bid instantly (`room:bid`, `auction:updated`). The leader's full name is never exposed (`maskBidderName`, e.g. "Carlos S.", "C***n"). When over, participants see "Vendido" (with winner and amount) or "Encerrado sem lances". |
-| **RF10** · Bid acceptance rules. | Bids require: valid session, membership in the auction room, live state (`startsAt <= now < endsAt`), author not seller or current leader, and amount $\ge$ current minimum bid. Refused bids return the reason and current minimum bid (`currentMinBid`). Bids are irrevocable. |
-| **RF11** · Bid concurrency and atomic recording. | In-memory read-check-write runs synchronously on Node's single thread. The state is flushed to disk (`saveStore()`) before any broadcast or response is sent, guaranteeing strict consistency. |
-| **RF12** · Bid idempotency. | The client generates a unique `idempotencyKey` per bid intent. Re-submissions (double clicks, retries) return the original successful result without creating a duplicate bid. |
-| **RF13** · Bid rate limiting. | Limits requests to at least 500 ms between bids for the same user. Legitimate RF12 retries pass through without penalty, and other users are not blocked. |
-| **RF14** · Dynamic minimum bid calculation. | Strict adherence to the hackathon's official tiered increment table based on the current price (cents-precise, strictly increasing, deterministic). |
+| **RF09** · Live auction room with real-time updates and masked leader identity. | Socket.io room broadcasts every bid instantly (`room:bid`, `auction:updated`); the room shows the last 10 bids. Bidders are shown by a masked name (`maskBidderName`, e.g. "Carlos S.", "C***n"; deleted accounts as "Conta excluída") and told apart by a `bidderTag` that is different in every auction, never by their user id: ids also appear on seller data, where full names are public, so they would reveal who is bidding. Who bid and who leads is only sent to the room; public listings carry no bidder data. When over, participants see "Vendido" (with winner and amount) or "Encerrado sem lances". |
+| **RF10** · Bid acceptance rules. | Bids require: valid session, membership in the auction room, live state (`startsAt <= now < endsAt`), author not seller or current leader, and amount $\ge$ current minimum bid. Every refusal returns the reason, a code (`SESSION_INVALID`, `NOT_IN_ROOM`, `NOT_IN_PROGRESS`, `SELF_BID`, `ALREADY_LEADER`, `BELOW_MINIMUM`, `RATE_LIMITED`, `INVALID_BID`) and the current minimum bid (`currentMinBid`, whenever the auction exists). Bids are irrevocable. |
+| **RF11** · Bid concurrency and atomic recording. | In-memory read-check-write runs synchronously on Node's single thread. The state is flushed to disk (`saveStore()`) before any broadcast or response is sent. If that write fails, the bid is undone in memory and the bidder is told it failed, so it can't be saved later by another change (cancellations work the same way). |
+| **RF12** · Bid idempotency. | The client creates one `idempotencyKey` per bid intent (auction + amount) and reuses it when it re-sends that bid after getting no definitive answer (timeout, dropped connection, server error, expired session; the key is kept in `sessionStorage`, so it survives logging in again). The key is saved with the bid in `store.json`, so a re-sent bid returns the original one, even after the auction moved on or the server restarted, and never creates a second bid. |
+| **RF13** · Bid rate limiting. | At least 500 ms between bid attempts of the same user. Every attempt counts, refused ones too, so a user can't flood the server with bids that fail. A re-send of the same bid (RF12, same key) is never rate limited, attempts refused by the limit don't restart the timer, and each user has their own timer, so nobody slows down anyone else. The bid button also waits 500 ms after each attempt. |
+| **RF14** · Dynamic minimum bid calculation. | The reference table: the increment depends only on the current price (R$ 1,00 up to R$ 99,99 … R$ 500,00 from R$ 25.000,00); the first bid may equal the starting price. Sellers don't choose an increment. The server computes the minimum next bid and sends it with every auction (`minBid`, `minIncrement`); the screens only display it. |
 
 **Team decision (RF02):** sessions **renew with use**. A session ends after **2 hours without any authenticated action**,
 and in any case **7 days after login**. Both are configurable in `server/.env` (`SESSION_IDLE_MINUTES`, `SESSION_MAX_DAYS`).
@@ -113,7 +113,7 @@ When the server ends a session, the client logs out and shows a "session expired
 | GET    | `/auctions?q=`      |         | List or search listings (live ones first)  |
 | GET    | `/auctions/rules`   |         | The limits for creating an auction (RF06) |
 | GET    | `/auctions/:id`     |         | One listing (no bids: those are in the room) |
-| POST   | `/auctions`         | ✔       | Create an auction: multipart with `title, description, category, startingPrice, minIncrement, durationMinutes, startsAt?` and the files in `photos` |
+| POST   | `/auctions`         | ✔       | Create an auction: multipart with `title, description, category, startingPrice, durationMinutes, startsAt?` and the files in `photos` |
 | POST   | `/auctions/:id/cancel` | ✔    | Cancel your own auction (RF08): `409` if it has bids, ended or was already cancelled |
 | GET    | `/photos/:name`     |         | An uploaded photo |
 
@@ -127,12 +127,13 @@ Anyone can connect (to receive public listing updates). Send the session token i
 
 | Direction            | Event             | Payload                                                    |
 | -------------------- | ----------------- | ---------------------------------------------------------- |
-| client → server      | `room:join`       | `auctionId`, ack → `{ ok, auction }` with recent bids (session required) |
+| client → server      | `clock:sync`      | ack → the server's time (epoch ms); anyone. The client measures the difference to its own clock on every connect and every 10 minutes, so countdowns and statuses follow the server's clock (RF16) even when the browser's is wrong |
+| client → server      | `room:join`       | `auctionId`, ack → `{ ok, auction, viewerTag }` with recent bids; `viewerTag` is your `bidderTag` in this auction (session required) |
 | client → server      | `room:leave`      | `auctionId`                                                |
 | client → server      | `bid:place`       | `{ auctionId, amount, idempotencyKey? }`, ack → `{ ok: true, auction, bid }` or `{ ok: false, error, code?, currentMinBid? }` (session + room required) |
 | server → everyone    | `auction:created` | new listing                                                |
 | server → everyone    | `auction:updated` | listing after a bid (price, bid count — no bidder)         |
-| server → room        | `room:bid`        | `{ auction, bid }` with the bidder's name                  |
+| server → room        | `room:bid`        | `{ auction, bid }` with the bidder's masked name and tag   |
 | server → connection  | `session:expired` | the session ended; the connection was removed from all rooms |
 
 The event types live in `shared/src/index.ts`, so both ends are type-checked against the same contract.
@@ -146,7 +147,7 @@ All money values are **integers in cents**.
 | Description | 10–2000 characters | — | Forces at least a sentence, without becoming a wall of text. |
 | Categories | Arte, Colecionáveis, Design, Eletrônicos, Moda, Música, Relógios, Veículos, Outros | — (in `shared/src/index.ts`) | Covers the kinds of goods typically auctioned; "Outros" catches the rest. |
 | Photos | 3–8, JPEG/PNG/WebP, ≤ 5 MB each | `LISTING_MIN_PHOTOS` (never below 3), `LISTING_MAX_PHOTOS`, `LISTING_MAX_PHOTO_MB` | 3 is required by RF05; 8 × 5 MB keeps one listing under 40 MB of disk. The type is read from the file's bytes, not its name. |
-| Starting price / increment | R$ 1,00 – R$ 100.000.000,00 | — | Whole cents only, so money is never rounded (RF19). |
+| Starting price | R$ 1,00 – R$ 100.000.000,00 | — | Whole cents only, so money is never rounded (RF19). |
 | Start | 1 minute to 30 days ahead | `LISTING_MIN_LEAD_MINUTES`, `LISTING_MAX_LEAD_DAYS` | A minimum lead keeps "Agendado" a real state (RN01); 30 days keeps the listing page current. |
 | Duration | 3 minutes to 7 days | `LISTING_MIN_DURATION_MINUTES`, `LISTING_MAX_DURATION_DAYS` | 3 minutes makes the demo possible; a week is the longest that still feels "live". |
 
