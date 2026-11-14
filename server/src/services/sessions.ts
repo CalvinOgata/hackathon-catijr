@@ -80,8 +80,11 @@ export function deleteSession(id: number) {
   if (removeSession(id)) saveStore();
 }
 
-/** Ends every session of a user except one (e.g. after a password change). Returns the ended ids. */
-export function deleteOtherSessions(userId: number, keepSessionId: number): number[] {
+/**
+ * Ends every session of a user, except `keepSessionId` if given (e.g. the one changing the
+ * password). Returns the ended ids.
+ */
+export function deleteUserSessions(userId: number, keepSessionId?: number): number[] {
   const ended: number[] = [];
   for (const session of store.sessions.values()) {
     if (session.userId === userId && session.id !== keepSessionId) {

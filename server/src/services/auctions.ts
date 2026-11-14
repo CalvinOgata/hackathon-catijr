@@ -131,6 +131,25 @@ export function createAuction(sellerId: number, input: NewAuction): Auction {
   return toAuction(auction);
 }
 
+/**
+ * What keeps a user from deleting their account: their own auctions still scheduled or
+ * live, and live auctions where they placed a bid (bids are irrevocable, RF10).
+ */
+export function accountDeletionBlockers(userId: number, now = Date.now()): AccountDeletionBlockers {
+  const blockers: AccountDeletionBlockers = { auctions: [], bids: [] };
+  for (const record of store.auctions.values()) {
+    const auction = toAuction(record);
+    const status = auctionStatus(auction, now);
+    if (status !== 'scheduled' && status !== 'live') continue;
+
+    if (record.sellerId === userId) blockers.auctions.push({ id: auction.id, title: auction.title, status });
+    else if (status === 'live' && store.bidsByAuction.get(record.id)!.some((bid) => bid.userId === userId)) {
+      blockers.bids.push({ id: auction.id, title: auction.title });
+    }
+  }
+  return blockers;
+}
+
 export class CancelError extends Error {
   statusCode: number;
 

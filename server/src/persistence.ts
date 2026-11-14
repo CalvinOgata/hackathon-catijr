@@ -35,8 +35,9 @@ export function loadStore(): boolean {
   if (data.version !== VERSION) throw new Error(`Unsupported ${FILE} version ${data.version}`);
 
   for (const user of data.users) {
+    user.deletedAt ??= null; // saved before accounts could be deleted
     store.users.set(user.id, user);
-    store.userIdsByEmail.set(user.email, user.id);
+    if (user.deletedAt === null) store.userIdsByEmail.set(user.email, user.id);
   }
   for (const item of data.items) store.items.set(item.id, item);
   for (const auction of data.auctions) {

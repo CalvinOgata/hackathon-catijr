@@ -13,6 +13,11 @@ export interface UserRecord {
   email: string;
   passwordHash: string;
   createdAt: number;
+  /**
+   * Set when the user deleted their account. The record stays (anonymized) because
+   * auctions, bids and results keep referring to it; see services/users.ts.
+   */
+  deletedAt: number | null;
 }
 
 /** What is being sold. An item can be auctioned more than once (e.g. relisted). */

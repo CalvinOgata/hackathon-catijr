@@ -25,8 +25,8 @@ class Auth {
   user = $state<PublicUser | null>(null);
   /** False until the stored session has been checked. */
   ready = $state(false);
-  /** Set when the server ended the session, so the UI can tell the user why they were logged out. */
-  notice = $state<string | null>(null);
+  /** Tells the user why they were logged out (session expired, account deleted). */
+  notice = $state<{ kind: 'error' | 'success'; text: string } | null>(null);
 
   constructor() {
     // The server is the source of truth for sessions (RF02): any rejection logs us out here
@@ -73,7 +73,14 @@ class Auth {
   expire() {
     if (!this.user) return;
     this.#clear();
-    this.notice = 'Sua sessão expirou. Entre novamente.';
+    this.notice = { kind: 'error', text: 'Sua sessão expirou. Entre novamente.' };
+  }
+
+  /** The server ends every session of the account, this one included. */
+  async deleteAccount(password: string, confirmation: string) {
+    await api.post('/account/delete', { password, confirmation });
+    this.#clear();
+    this.notice = { kind: 'success', text: 'Sua conta foi excluída. Seu histórico de leilões foi mantido de forma anônima.' };
   }
 
   #start({ token, user }: AuthResponse) {

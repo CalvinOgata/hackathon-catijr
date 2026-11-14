@@ -8,6 +8,20 @@ export interface PublicUser {
   createdAt: string; // ISO date
 }
 
+/** What the user must type to confirm deleting their account. */
+export const DELETE_ACCOUNT_CONFIRMATION = 'DELETAR';
+
+/** Shown instead of the name of a deleted account (its history is kept, anonymized). */
+export const DELETED_ACCOUNT_NAME = 'Conta excluída';
+
+/** What still prevents a user from deleting their account. Empty lists mean it can be deleted. */
+export interface AccountDeletionBlockers {
+  /** Their own auctions that are scheduled or live. */
+  auctions: { id: number; title: string; status: 'scheduled' | 'live' }[];
+  /** Live auctions where they placed a bid (bids can't be undone, RF10). */
+  bids: { id: number; title: string }[];
+}
+
 /** Applied after trimming and collapsing repeated spaces. */
 export const DISPLAY_NAME_LENGTH = { min: 2, max: 60 } as const;
 
