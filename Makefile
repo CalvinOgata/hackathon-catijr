@@ -10,7 +10,7 @@ PACKAGE_FILES  := package.json $(wildcard package-lock.json) shared/package.json
 
 .DEFAULT_GOAL := help
 
-.PHONY: help setup dev server client check build start reset-data clean reset check-node check-ports
+.PHONY: help setup dev server client check build start service update logs reset-data clean reset check-node check-ports
 
 help: ## Show this help
 	@echo "Usage: make <command>"
@@ -36,8 +36,19 @@ check: setup ## Type-check server and client
 build: setup ## Build server and client for production
 	npm run build
 
-start: build check-ports ## Build, then run the production build locally
-	npx concurrently -n server,client -c blue,magenta "npm run start -w server" "npm run preview -w client -- --port $(CLIENT_PORT) --strictPort"
+start: build check-ports ## Build, then run the production build (site + API on port 3333)
+	cd server && NODE_ENV=production node dist/index.js
+
+service: build ## On the VM: install and start the systemd service (starts on boot, restarts on failure)
+	./deploy/install-service.sh
+
+update: ## On the VM: pull the latest code, rebuild and restart the service
+	git pull --ff-only
+	$(MAKE) build
+	sudo systemctl restart arremate
+
+logs: ## On the VM: follow the service's logs (bids, openings, closings, errors)
+	journalctl -u arremate -f
 
 reset-data: ## Delete saved data and uploaded photos (sample data is created again on next start)
 	rm -rf server/data

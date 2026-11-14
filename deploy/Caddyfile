@@ -1,0 +1,14 @@
+# Optional reverse proxy in front of Arremate (RNF01), with Caddy (https://caddyserver.com).
+# Copy to /etc/caddy/Caddyfile and run `sudo systemctl reload caddy`.
+#
+# Plain HTTP on port 80, by the VM's address:
+:80 {
+	reverse_proxy 127.0.0.1:3333
+}
+
+# With a domain pointing to the VM, Caddy gets and renews the HTTPS certificate by itself.
+# Use this block instead of the one above (replace the domain):
+#
+# leilao.example.com {
+# 	reverse_proxy 127.0.0.1:3333
+# }

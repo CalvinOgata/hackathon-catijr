@@ -44,9 +44,18 @@ export interface AuctionRecord {
   bidCount: number;
   featured: boolean;
   startsAt: number;
+  /** The end in force: later than `originalEndsAt` when late bids extended it (RF15). */
   endsAt: number;
+  originalEndsAt: number;
   /** Cancelled by the seller (RF08); the record is kept, never deleted. */
   cancelledAt: number | null;
+  /**
+   * When the lifecycle job saw it open and close (RF17). The state itself always follows from the
+   * times and bids (see `auctionStatus`); these only record that each transition was handled,
+   * once, so it's announced once even across restarts (RF18).
+   */
+  openedAt: number | null;
+  closedAt: number | null;
   createdAt: number;
 }
 

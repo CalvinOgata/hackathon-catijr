@@ -1,6 +1,10 @@
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import cors from '@fastify/cors';
+import fastifyStatic from '@fastify/static';
 import Fastify from 'fastify';
 import { config } from './config';
+import { registerLifecycle } from './lifecycle';
 import authPlugin from './plugins/auth';
 import accountRoutes from './routes/account';
 import auctionRoutes from './routes/auctions';
@@ -31,6 +35,27 @@ export async function buildApp() {
   await app.register(accountRoutes, { prefix: '/api/account' });
   await app.register(auctionRoutes, { prefix: '/api/auctions' });
   await app.register(photoRoutes, { prefix: '/api/photos' });
+
+  registerLifecycle(app);
+
+  // On the VM, this process also serves the built web app, so everything is one service on one
+  // port (RNF01). In development the client runs on Vite's dev server instead.
+  if (existsSync(join(config.clientDir, 'index.html'))) {
+    await app.register(fastifyStatic, {
+      root: config.clientDir,
+      setHeaders: (res, path) => {
+        // File names under _app/immutable change with their content; the page itself must not be cached
+        res.header('cache-control', path.includes('/_app/immutable/') ? 'public, max-age=31536000, immutable' : 'no-cache');
+      },
+    });
+    // Any other page is a route of the single-page app (e.g. /auctions/3)
+    app.setNotFoundHandler((request, reply) => {
+      const isPage = request.method === 'GET' && !request.url.startsWith('/api/') && !request.url.startsWith('/socket.io');
+      if (isPage) return reply.header('cache-control', 'no-cache').sendFile('index.html');
+      return reply.code(404).send({ message: 'Não encontrado' });
+    });
+    app.log.info(`Serving the web app from ${config.clientDir}`);
+  }
 
   return app;
 }

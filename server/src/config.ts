@@ -1,5 +1,6 @@
 import { CATEGORIES, type ListingRules } from '@auction/shared';
 import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 if (existsSync('.env')) process.loadEnvFile('.env');
 
@@ -27,6 +28,9 @@ const listing: ListingRules = {
   price: { min: 100, max: 100_000_000_00 }, // R$ 1,00 to R$ 100 million
   leadMinutes: { min: env('LISTING_MIN_LEAD_MINUTES', 1), max: env('LISTING_MAX_LEAD_DAYS', 30) * DAY },
   durationMinutes: { min: env('LISTING_MIN_DURATION_MINUTES', 3), max: env('LISTING_MAX_DURATION_DAYS', 7) * DAY },
+  // Team decision (RF15): the reference rule. Late bids can't win without giving others time to
+  // answer, and the 30-minute cap keeps an auction from going on forever.
+  extension: { windowMinutes: env('BID_EXTENSION_WINDOW_MINUTES', 2), maxMinutes: env('BID_EXTENSION_MAX_MINUTES', 30) },
 };
 
 export const config = {
@@ -36,6 +40,8 @@ export const config = {
   corsOrigin: process.env.CORS_ORIGIN ?? 'http://localhost:5173',
   /** Where the JSON data file and the uploaded photos are kept, on the VM's disk. */
   dataDir: process.env.DATA_DIR ?? 'data',
+  /** The built web app (`npm run build -w client`), served by this process when it exists (RNF01). */
+  clientDir: resolve(process.env.CLIENT_DIR ?? '../client/build'),
   listing,
   login: {
     // Team decision: after this many wrong passwords in a row, the account's login is

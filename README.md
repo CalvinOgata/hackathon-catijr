@@ -1,6 +1,8 @@
 # hackathon-catijr
 Hackathon da CatiJr — a real-time auction platform.
 
+**Sistema publicado:** _(endereço da VM — preencher após a publicação, ver **Publishing on the VM**)_
+
 ## Stack
 
 | Package   | What                                                                 |
@@ -29,6 +31,39 @@ between restarts (see **Data storage** below). `make reset-data` starts over fro
 Config lives in `server/.env` and `client/.env` (created from the `.env.example` files).
 Session duration is configured there too (see **Business rules** below).
 
+## Publishing on the VM (RNF01, RNF03)
+
+One Node process serves everything on one port: the built web app, the API and the WebSocket
+connection, plus the job that opens and closes auctions. Data and photos stay on the VM's disk
+(`server/data/`). A systemd service keeps it running (starts on boot, restarts if it stops);
+a reverse proxy in front is optional.
+
+From scratch on an Ubuntu/Debian VM:
+
+```bash
+# 1. Node 22 LTS, git and make
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+sudo apt-get install -y nodejs git make
+
+# 2. The code
+git clone https://github.com/CalvinOgata/hackathon-catijr.git
+cd hackathon-catijr
+
+# 3. Build and install the service (installs dependencies and creates server/.env on the first run)
+make service
+```
+
+The site is then at `http://<VM address>:3333` (open the port in the VM's firewall, or change `PORT`
+in `server/.env`). To serve it on port 80, or with HTTPS on a domain, install [Caddy](https://caddyserver.com)
+and use `deploy/Caddyfile` (WebSockets work through it as is).
+
+| On the VM | |
+| --------- | --- |
+| `make update` | Pull the latest code, rebuild and restart |
+| `make logs` | Follow the logs: requests, auctions opening and closing, errors |
+| `sudo systemctl restart arremate` | Restart (data, logins and auctions survive it, RF18) |
+| `make reset-data && sudo systemctl restart arremate` | Start over from the sample data |
+
 ## Commands
 
 Run `make` to list them all.
@@ -40,7 +75,10 @@ Run `make` to list them all.
 | `make client`   | Only the web client                                          |
 | `make check`    | Type-check server and client                                 |
 | `make build`    | Build server (`server/dist`) and client (`client/build`)     |
-| `make start`    | Build and run the production build locally                   |
+| `make start`    | Build and run the production build (site + API on port 3333) |
+| `make service`  | On the VM: build and install/restart the systemd service     |
+| `make update`   | On the VM: pull, rebuild and restart the service             |
+| `make logs`     | On the VM: follow the service's logs                         |
 | `make reset-data` | Delete saved data and uploaded photos (sample data comes back on next start) |
 | `make clean`    | Remove build output                                          |
 | `make reset`    | Remove build output and every `node_modules`                 |
@@ -66,7 +104,14 @@ The Makefile only wraps npm scripts, so `npm run dev`, `npm run build`, etc. sti
 | **RF12** · Bid idempotency. | The client creates one `idempotencyKey` per bid intent (auction + amount) and reuses it when it re-sends that bid after getting no definitive answer (timeout, dropped connection, server error, expired session; the key is kept in `sessionStorage`, so it survives logging in again). The key is saved with the bid in `store.json`, so a re-sent bid returns the original one, even after the auction moved on or the server restarted, and never creates a second bid. |
 | **RF13** · Bid rate limiting. | At least 500 ms between bid attempts of the same user. Every attempt counts, refused ones too, so a user can't flood the server with bids that fail. A re-send of the same bid (RF12, same key) is never rate limited, attempts refused by the limit don't restart the timer, and each user has their own timer, so nobody slows down anyone else. The bid button also waits 500 ms after each attempt. |
 | **RF14** · Dynamic minimum bid calculation. | The reference table: the increment depends only on the current price (R$ 1,00 up to R$ 99,99 … R$ 500,00 from R$ 25.000,00); the first bid may equal the starting price. Sellers don't choose an increment. The server computes the minimum next bid and sends it with every auction (`minBid`, `minIncrement`); the screens only display it. |
+| **RF15** · A last-second bid can't win without a chance to answer; auctions can't go on forever. | **Team decision:** the reference rule. A bid leaving **less than 2 minutes** moves the end to **2 minutes after the bid**, up to **30 minutes** past the original end in all (`BID_EXTENSION_WINDOW_MINUTES`, `BID_EXTENSION_MAX_MINUTES`). Applied in the same step that accepts the bid, so the end can't pass in between; the new end reaches every room and listing with the bid, and the auction page shows "Prorrogado" with the original time. 2 minutes is enough to see the bid and answer; the cap guarantees an end. |
+| **RF16** · The server's clock is the one that counts. | Every bid is checked against the server's clock when it's processed. Browsers sync their countdowns to the server's time (`clock:sync`), so screens are right even when a computer's clock is wrong, but the countdown is only visual. |
+| **RF17 / RF18** · Auctions open and close by themselves, also across restarts; closing twice never duplicates anything; no bid after the close. | **Team decision:** an auction's state is always **computed from its times, bids and cancellation**, never stored as a flag that a job has to flip. So it's right at any moment, after any restart, and no bid can land after the end (it's checked in the same step that records the bid, which can't interleave with anything). A **lifecycle job** (`server/src/lifecycle.ts`, every second and on start) announces each opening and closing to everyone and records it once (`openedAt`, `closedAt`), so it runs exactly once even if the server was down at the time. We chose this over a job that changes states because there's no window in which the stored state is wrong. |
+| **RF19** · No rounding errors; times right in every timezone. | Money is always whole cents (integers). Times are stored as instants and sent as ISO 8601 UTC; the screens show them in the viewer's own timezone. |
+| **RF20** · A public page lists scheduled and live auctions and leads to each one's page and room. | **Team decision:** the home page shows **only open auctions** (ended and cancelled ones keep their page, by link): **live first, ending soonest on top** (they need attention now), **then scheduled, starting soonest**. With many auctions it loads **12 at a time** ("Carregar mais"), filtered by search and category on the server; auctions that close or are cancelled leave the page live, and new ones appear in their place. |
 | **RF25** · Spectators and headcount. | Everyone enters a room as a spectator, the seller included: spectators see everything live but can't bid. "Participar do leilão" makes them a participant without leaving the room (`room:upgrade`); the seller can only watch their own auction. The room shows how many participants and spectators are in it, counting people rather than connections (someone watching in one tab and bidding in another is a participant) and updating when anyone joins, upgrades, leaves, closes the tab or logs out. A participant who reconnects comes back as a participant. |
+| **RNF01 / RNF03** · Everything runs on the VM and can be recreated from this README. | **Team decision:** one Node process (site + API + WebSocket + lifecycle job) under systemd, data on the VM's disk; see **Publishing on the VM**. One process keeps the in-memory guarantees simple (RF11) and there's nothing else to install. |
+| **RNF04** · Demo data. | See **Demo data** below. |
 
 **Team decision (RF02):** sessions **renew with use**. A session ends after **2 hours without any authenticated action**,
 and in any case **7 days after login**. Both are configurable in `server/.env` (`SESSION_IDLE_MINUTES`, `SESSION_MAX_DAYS`).
@@ -92,6 +137,10 @@ When the server ends a session, the client logs out and shows a "session expired
   one email, one account at a time). Its auctions, bids, results and photos stay, because RF08 says nothing is deleted and
   results, seller profiles (RF22), "Minhas participações" (RF27) and purchase history (RF31) depend on them.
 
+**Demo data** (RNF04), created on the first start (and again after `make reset-data`): the accounts below and
+16 auctions in every state: live with and without bids, scheduled, sold (with winners), ended without bids and
+cancelled. Past bids are placed through the normal bid rules, as if at their time, so the sample data can't break them.
+
 **Demo accounts** (RNF04: ao menos 1 comitente e 3 compradores com dados de demonstração):
 - **Comitente / Seller:** `demo@arremate.dev` / `Demo@12345` (possui os leilões de exemplo; acesse para ver a visão de vendedor)
 - **Compradores / Buyers:**
@@ -111,8 +160,9 @@ When the server ends a session, the client logs out and shows a "session expired
 | PUT    | `/account/password` | ✔       | `{ currentPassword, newPassword }`; ends the account's other sessions |
 | GET    | `/account/deletion-check` | ✔ | What still prevents deleting the account (active auctions, bids in live auctions) |
 | POST   | `/account/delete`   | ✔       | `{ password, confirmation: "DELETAR" }`; `409` while something is still open |
-| GET    | `/auctions?q=`      |         | List or search listings (live ones first)  |
-| GET    | `/auctions/rules`   |         | The limits for creating an auction (RF06) |
+| GET    | `/auctions?q=&category=&offset=&limit=` | | Public listing (RF20): scheduled and live auctions only, live ending soonest first, then scheduled starting soonest; `{ auctions, total }`, 12 per page by default (max 50) |
+| GET    | `/auctions/featured` |        | Featured open auctions, for the home carousel |
+| GET    | `/auctions/rules`   |         | The limits for creating an auction (RF06) and the extension rule (RF15) |
 | GET    | `/auctions/:id`     |         | One listing (no bids: those are in the room) |
 | POST   | `/auctions`         | ✔       | Create an auction: multipart with `title, description, category, startingPrice, durationMinutes, startsAt?` and the files in `photos` |
 | POST   | `/auctions/:id/cancel` | ✔    | Cancel your own auction (RF08): `409` if it has bids, ended or was already cancelled |
@@ -153,6 +203,7 @@ All money values are **integers in cents**.
 | Starting price | R$ 1,00 – R$ 100.000.000,00 | — | Whole cents only, so money is never rounded (RF19). |
 | Start | 1 minute to 30 days ahead | `LISTING_MIN_LEAD_MINUTES`, `LISTING_MAX_LEAD_DAYS` | A minimum lead keeps "Agendado" a real state (RN01); 30 days keeps the listing page current. |
 | Duration | 3 minutes to 7 days | `LISTING_MIN_DURATION_MINUTES`, `LISTING_MAX_DURATION_DAYS` | 3 minutes makes the demo possible; a week is the longest that still feels "live". |
+| Extension (RF15) | 2 minutes, at most 30 in all | `BID_EXTENSION_WINDOW_MINUTES`, `BID_EXTENSION_MAX_MINUTES` | The reference rule; see RF15 above. |
 
 ### Data storage
 
@@ -166,6 +217,7 @@ By the organizers' rule there is no database and no cloud storage: everything is
 - **Photos** are files in `server/data/photos/` with random names, served by the API at `/api/photos/<name>`.
   Only names the server generated are served, so no other file can be requested.
 - `server/data/` is ignored by git. The location can be changed with `DATA_DIR`.
+- Each auction also records when it opened and closed (`openedAt`, `closedAt`), written by the lifecycle job (RF17).
 - Run a **single** server process: two processes would each have their own copy in memory.
 - Node runs the JavaScript on one thread and every check-then-update in `server/src/services/` is synchronous,
   so two bids (or two signups with the same email) can never interleave.
@@ -180,10 +232,11 @@ client/src/
 │   ├── auth.svelte.ts      session state (login/signup/logout/expiry)
 │   ├── socket.svelte.ts    shared Socket.io connection
 │   ├── room.svelte.ts      AuctionRoom: joining an auction's live room
-│   ├── clock.svelte.ts     one ticking clock for all countdowns
+│   ├── clock.svelte.ts     one ticking clock for all countdowns, synced with the server's
+│   ├── rules.ts            the server's limits and rules, fetched once
 │   └── components/         Header, AuctionHero, AuctionCard, BidForm, PasswordChecklist, ...
 └── routes/
-    ├── +page.svelte        featured auction carousel + grid of all auctions/search results
+    ├── +page.svelte        featured auction carousel + open auctions (search, categories, "load more")
     ├── auctions/[id]/      listing (public) + live room (logged in)
     ├── sell/               list an item
     ├── account/            my account (name, password, delete account)

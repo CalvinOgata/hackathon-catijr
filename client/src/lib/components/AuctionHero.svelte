@@ -4,8 +4,9 @@
   import { page } from '$app/state';
   import { auth } from '#lib/auth.svelte.ts';
   import { clock } from '#lib/clock.svelte.ts';
-  import { formatDateTime, formatMoney, formatTimeAgo } from '#lib/format.ts';
+  import { formatDateTime, formatMinutes, formatMoney, formatTime, formatTimeAgo } from '#lib/format.ts';
   import type { AuctionRoom } from '#lib/room.svelte.ts';
+  import { loadRules } from '#lib/rules.ts';
   import { flash } from '#lib/transitions.ts';
   import AuctionImage from './AuctionImage.svelte';
   import BidForm from './BidForm.svelte';
@@ -46,6 +47,13 @@
     upgradeError = await room.upgrade();
     upgrading = false;
   }
+
+  // RF15: the extension rule, shown while the auction is live, and whether late bids moved the end
+  let extension = $state<{ windowMinutes: number; maxMinutes: number } | null>(null);
+  loadRules()
+    .then((rules) => (extension = rules.extension))
+    .catch(() => {}); // only the explanation is missing
+  const extended = $derived(auction.endsAt !== auction.originalEndsAt);
 
   // Gallery: which photo is shown large (reset when showing another auction)
   let selected = $state(0);
@@ -110,9 +118,20 @@
         {:else}
           <span class="label">{scheduled ? 'Começa em' : 'Termina em'}</span>
           <strong class:starting={scheduled}><Countdown until={scheduled ? auction.startsAt : auction.endsAt} warn={!scheduled} /></strong>
+          {#if extended}
+            <span class="extended small" title="Término original: {formatDateTime(auction.originalEndsAt)}">
+              Prorrogado · era {formatTime(auction.originalEndsAt)}
+            </span>
+          {/if}
         {/if}
       </div>
     </div>
+    {#if status === 'live' && extension}
+      <p class="rule muted small">
+        Lances nos últimos {formatMinutes(extension.windowMinutes)} prorrogam o término para {formatMinutes(extension.windowMinutes)}
+        após o lance, até {formatMinutes(extension.maxMinutes)} além do horário original.
+      </p>
+    {/if}
 
     {#if status === 'sold'}
       <div class="outcome outcome-sold" in:flash>
@@ -387,6 +406,16 @@
   .ends strong {
     font-size: 20px;
     line-height: 1.2;
+  }
+
+  .extended {
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  .rule {
+    margin: -12px 0 0;
+    padding: 0 4px;
   }
 
   @container (min-width: 560px) {
