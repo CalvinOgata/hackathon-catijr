@@ -22,6 +22,7 @@ import { config } from '../config';
 import { AppError } from '../errors';
 import { transaction } from '../persistence';
 import { nextId, store, type AuctionRecord, type BidRecord, type ItemRecord } from '../store';
+import { PHOTO_URL_PREFIX } from './photos';
 
 const RECENT_BIDS = 10;
 
@@ -157,6 +158,15 @@ export function createAuction(sellerId: number, input: NewAuction): Auction {
     store.bidsByAuction.set(auction.id, []);
   });
   return toAuction(auction);
+}
+
+/** Items with a photo that isn't stored on this server (see `localizeSamplePhotos` in seed.ts). */
+export const itemsWithOutsidePhotos = (): Pick<ItemRecord, 'id' | 'title' | 'photos'>[] =>
+  [...store.items.values()].filter((item) => item.photos.some((url) => !url.startsWith(PHOTO_URL_PREFIX)));
+
+export function replaceItemPhotos(itemId: number, photos: string[]) {
+  const item = store.items.get(itemId)!;
+  transaction(() => (item.photos = photos));
 }
 
 /**

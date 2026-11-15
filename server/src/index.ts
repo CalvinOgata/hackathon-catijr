@@ -1,11 +1,14 @@
 import { buildApp } from './app';
 import { config } from './config';
 import { loadStore } from './persistence';
-import { seed } from './seed';
+import { localizeSamplePhotos, seed } from './seed';
 
 // Saved data from the VM's disk; sample data only on the very first start
-if (!loadStore()) await seed();
+const loaded = loadStore();
+if (!loaded) await seed();
+const fixedPhotos = loaded ? localizeSamplePhotos() : 0;
 const app = await buildApp();
+if (fixedPhotos) app.log.info(`Replaced outside photo links of ${fixedPhotos} sample items with local copies`);
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.once(signal, async () => {

@@ -143,6 +143,8 @@ When the server ends a session, the client logs out and shows a "session expired
 cancelled. Past bids are placed through the normal bid rules, as if at their time, so the sample data can't break them.
 Their photos are illustrations shipped in `server/seed-photos/` and copied into the data folder like uploads, so the demo
 depends on nothing outside the VM (RNF01). Replace those files with real photos (same names) to change them.
+Data saved by older versions linked them to picsum.photos instead; on start the server switches those to the local
+copies, keeping everything else.
 
 **Demo accounts** (RNF04: ao menos 1 comitente e 3 compradores com dados de demonstração):
 - **Comitente / Seller:** `demo@arremate.dev` / `Demo@12345` (possui os leilões de exemplo; acesse para ver a visão de vendedor)

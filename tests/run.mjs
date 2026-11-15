@@ -25,6 +25,7 @@ const SUITES = {
     env: { ...NOW, LISTING_MIN_DURATION_MINUTES: '1', BID_EXTENSION_WINDOW_MINUTES: '1', BID_EXTENSION_MAX_MINUTES: '0.05' },
     steps: ['main', 'stop', 'down', 'start', 'after'],
   },
+  'sample-photos': { env: {}, steps: ['stop', 'break', 'start', 'after'] },
   'session-sweep': { env: { ...NOW, SESSION_IDLE_MINUTES: '0.1' }, steps: [''] },
 };
 
