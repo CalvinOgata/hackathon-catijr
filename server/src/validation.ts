@@ -1,4 +1,18 @@
+import { formatMoney, PASSWORD_LENGTH } from '@auction/shared';
 import type { FastifySchemaValidationError } from 'fastify/types/schema';
+
+// Request schemas: every body field listed is required, and nothing else is allowed.
+export const body = (properties: Record<string, object>) => ({ type: 'object', required: Object.keys(properties), additionalProperties: false, properties });
+
+export const text = (maxLength: number, minLength = 0) => ({ type: 'string', minLength, maxLength });
+
+export const email = { type: 'string', format: 'email', maxLength: 254 };
+/** A password being chosen: the full policy is checked after (`checkNewPassword`), with a clearer message. */
+export const newPassword = text(PASSWORD_LENGTH.max);
+/** A password being typed to prove who you are. */
+export const password = text(PASSWORD_LENGTH.max, 1);
+
+export const idParams = { type: 'object', required: ['id'], properties: { id: { type: 'integer', minimum: 1 } } };
 
 // Fastify's built-in validation messages are in English and name fields like
 // "body/password"; users see these, so they're rewritten in Portuguese.
@@ -20,14 +34,12 @@ const FIELD_LABELS: Record<string, string> = {
 
 const MONEY_FIELDS = new Set(['startingPrice']);
 
-const money = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
-
 function describe(error: FastifySchemaValidationError): string {
   const params = error.params as Record<string, unknown>;
   const field = error.instancePath.split('/').pop() || String(params.missingProperty ?? '');
   const label = `O campo “${FIELD_LABELS[field] ?? field}”`;
   const limit = Number(params.limit);
-  const amount = MONEY_FIELDS.has(field) ? money.format(limit / 100) : limit;
+  const amount = MONEY_FIELDS.has(field) ? formatMoney(limit) : limit;
 
   switch (error.keyword) {
     case 'required':

@@ -7,7 +7,7 @@
   import AuctionCard from '#lib/components/AuctionCard.svelte';
   import AuctionHero from '#lib/components/AuctionHero.svelte';
   import { AuctionRoom } from '#lib/room.svelte.ts';
-  import { socket } from '#lib/socket.svelte.ts';
+  import { listen } from '#lib/socket.svelte.ts';
 
   // The public listing (RF20): scheduled and live auctions only, in the server's order, a page at
   // a time. Auctions that close or are cancelled leave the list as soon as the server says so.
@@ -102,8 +102,8 @@
   const matchesFilters = (auction: Auction) => !query && (category === ALL || auction.category === category);
 
   // Public listing updates, for everyone
-  $effect(() => {
-    const onUpdated = (auction: Auction) => {
+  $effect(() =>
+    listen('auction:updated', (auction) => {
       const index = auctions.findIndex((a) => a.id === auction.id);
       if (index !== -1) {
         if (isOpen(auction)) auctions[index] = auction;
@@ -115,8 +115,11 @@
       }
       const featuredIndex = featured.findIndex((a) => a.id === auction.id);
       if (featuredIndex !== -1) featured[featuredIndex] = auction; // the carousel shows how it ended
-    };
-    const onCreated = (auction: Auction) => {
+    }),
+  );
+
+  $effect(() =>
+    listen('auction:created', (auction) => {
       if (!matchesFilters(auction) || !isOpen(auction)) return;
       total++;
       // Into its place in the order, if that's within what's loaded
@@ -124,14 +127,8 @@
       const index = auctions.findIndex((a) => listingOrder(auction, a, now) < 0);
       if (index !== -1) auctions.splice(index, 0, auction);
       else if (!hasMore) auctions.push(auction);
-    };
-    socket.on('auction:updated', onUpdated);
-    socket.on('auction:created', onCreated);
-    return () => {
-      socket.off('auction:updated', onUpdated);
-      socket.off('auction:created', onCreated);
-    };
-  });
+    }),
+  );
 
   const move = (step: number) => (heroIndex = (heroIndex + step + featured.length) % featured.length);
 </script>

@@ -1,6 +1,6 @@
 import type { Auction, Bid, RoomMode, RoomPresence } from '@auction/shared';
 import { untrack } from 'svelte';
-import { socket } from './socket.svelte.ts';
+import { listen, socket } from './socket.svelte.ts';
 
 // Several components may watch the same room (e.g. while navigating from the home
 // hero to the auction page), so only leave on the server when the last one is gone.
@@ -36,14 +36,17 @@ export class AuctionRoom {
   #left = false;
   /** Only the latest join attempt counts: an older one may time out after a newer one worked. */
   #attempt = 0;
+  #unsubscribe: (() => void)[];
 
   constructor(auctionId: number) {
     this.auctionId = auctionId;
     watchers.set(auctionId, (watchers.get(auctionId) ?? 0) + 1);
-    socket.on('connect', this.#join); // the server forgets rooms when a connection drops
-    socket.on('room:bid', this.#onBid);
-    socket.on('auction:updated', this.#onUpdated); // status changes without a bid, e.g. cancelled (RF08)
-    socket.on('room:presence', this.#onPresence); // RF25: headcount updates
+    this.#unsubscribe = [
+      listen('connect', this.#join), // the server forgets rooms when a connection drops
+      listen('room:bid', this.#onBid),
+      listen('auction:updated', this.#onUpdated), // status changes without a bid, e.g. cancelled (RF08)
+      listen('room:presence', this.#onPresence), // RF25: headcount updates
+    ];
     // Rooms are usually created inside an $effect: joining reads shared state (`modes`), which
     // must not become a dependency of that effect, or every answer would recreate the room.
     if (socket.connected) untrack(this.#join);
@@ -52,10 +55,7 @@ export class AuctionRoom {
   leave() {
     if (this.#left) return;
     this.#left = true;
-    socket.off('connect', this.#join);
-    socket.off('room:bid', this.#onBid);
-    socket.off('auction:updated', this.#onUpdated);
-    socket.off('room:presence', this.#onPresence);
+    this.#unsubscribe.forEach((unsubscribe) => unsubscribe());
 
     const remaining = (watchers.get(this.auctionId) ?? 1) - 1;
     if (remaining > 0) watchers.set(this.auctionId, remaining);
@@ -75,48 +75,44 @@ export class AuctionRoom {
   }
 
   /**
-   * RF25: makes this connection a participant without leaving the room.
-   * Returns null when done, or why it couldn't be done (the room itself stays as it was).
+   * RF25: makes this connection a participant without leaving the room (joining again with the
+   * new role). Returns null when done, or why it couldn't be done (the room stays as it was).
    */
   async upgrade(): Promise<string | null> {
     if (this.mode === 'participant') return null;
-    if (this.#left) return 'Você saiu da sala do leilão.';
     try {
-      const result = await socket.timeout(5000).emitWithAck('room:upgrade', this.auctionId);
-      if (!result.ok) return result.error;
-      if (this.#left) return null;
-      const { recentBids, ...auction } = result.auction;
-      this.auction = auction;
-      this.bids = recentBids;
-      this.viewerTag = result.viewerTag;
-      modes[this.auctionId] = result.mode;
-      return null;
+      const refused = await this.#enter('participant');
+      if (refused) return refused;
+      return modes[this.auctionId] === 'participant' ? null : 'Você não pode participar do próprio leilão, só assistir';
     } catch {
       return 'Não foi possível entrar como participante. Tente novamente.';
     }
   }
 
+  /** Joins with `mode` and takes in the room's state. Returns why the server refused, or null. Throws when it doesn't answer. */
+  async #enter(mode: RoomMode): Promise<string | null> {
+    const result = await socket.timeout(5000).emitWithAck('room:join', this.auctionId, mode);
+    if (!result.ok) return result.error;
+    if (this.#left) return null;
+    const { recentBids, ...auction } = result.auction;
+    this.auction = auction;
+    this.bids = recentBids;
+    this.viewerTag = result.viewerTag;
+    modes[this.auctionId] = result.mode;
+    this.joined = true;
+    return null;
+  }
+
+  // RF25: spectator at first; after reconnecting, the role this connection had
   #join = async () => {
     const attempt = ++this.#attempt;
+    let error: string | null;
     try {
-      // RF25: spectator at first; after reconnecting, the role this connection had
-      const result = await socket.timeout(5000).emitWithAck('room:join', this.auctionId, this.mode);
-      if (this.#left || attempt !== this.#attempt) return;
-      if (result.ok) {
-        const { recentBids, ...auction } = result.auction;
-        this.auction = auction;
-        this.bids = recentBids;
-        modes[this.auctionId] = result.mode;
-        this.viewerTag = result.viewerTag;
-        this.joined = true;
-        this.error = null;
-      } else {
-        this.joined = false;
-        this.error = result.error;
-      }
+      error = await this.#enter(this.mode);
     } catch {
-      if (!this.#left && attempt === this.#attempt) this.error = 'Não foi possível acessar a sala do leilão. Tentaremos de novo quando a conexão voltar…';
+      error = 'Não foi possível acessar a sala do leilão. Tentaremos de novo quando a conexão voltar…';
     }
+    if (!this.#left && attempt === this.#attempt) this.error = error;
   };
 
   /** The current leader's latest bid, or null without bids (or before joining). */

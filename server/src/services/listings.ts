@@ -1,84 +1,71 @@
+import { formatDuration, formatMegabytes, formatMoney, MINUTE, type Auction } from '@auction/shared';
 import { config } from '../config';
-import type { NewAuction } from './auctions';
-import { detectPhotoType, type PhotoType } from './photos';
+import { AppError } from '../errors';
+import { createAuction } from './auctions';
+import { deletePhotos, detectPhotoType, savePhotos } from './photos';
 
-// Validates a "create auction" form (RF05) against the limits in config.ts (RF06).
-// Multipart fields arrive as plain strings, so everything is parsed and checked here.
+// Creating an auction from the "Anunciar item" form (RF05), checked against the limits in
+// config.ts (RF06). Multipart fields arrive as plain strings, so everything is parsed here.
 
-type Result = { ok: true; value: Omit<NewAuction, 'photos'>; photos: { data: Buffer; type: PhotoType }[] } | { ok: false; message: string };
+const invalid = (message: string) => new AppError(400, message);
 
-const MINUTE = 60 * 1000;
-const money = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
-const megabytes = (bytes: number) => `${Math.round((bytes / 1024 / 1024) * 10) / 10} MB`;
-
-function formatMinutes(minutes: number): string {
-  if (minutes % (24 * 60) === 0) return minutes === 24 * 60 ? '1 dia' : `${minutes / (24 * 60)} dias`;
-  if (minutes % 60 === 0) return minutes === 60 ? '1 hora' : `${minutes / 60} horas`;
-  return minutes === 1 ? '1 minuto' : `${minutes} minutos`;
-}
-
-/** Whole number of cents within the price limits, or an error message. */
-function parsePrice(value: string | undefined, label: string): number | string {
-  const { min, max } = config.listing.price;
-  const cents = Number(value);
-  if (!value || !Number.isInteger(cents)) return `Informe o ${label} em centavos (número inteiro)`;
-  if (cents < min || cents > max) return `O ${label} deve ser de ${money.format(min / 100)} a ${money.format(max / 100)}`;
-  return cents;
-}
-
-export function validateListing(fields: Record<string, string>, files: Buffer[], now = Date.now()): Result {
+function validateListing(fields: Record<string, string>, files: Buffer[], now: number) {
   const rules = config.listing;
-  const fail = (message: string): Result => ({ ok: false, message });
+  const between = (value: number, { min, max }: { min: number; max: number }) => value >= min && value <= max;
 
   const title = (fields.title ?? '').trim().replace(/\s+/g, ' ');
-  if (title.length < rules.titleLength.min || title.length > rules.titleLength.max) {
-    return fail(`O nome deve ter de ${rules.titleLength.min} a ${rules.titleLength.max} caracteres`);
+  if (!between(title.length, rules.titleLength)) {
+    throw invalid(`O nome deve ter de ${rules.titleLength.min} a ${rules.titleLength.max} caracteres`);
   }
 
   const description = (fields.description ?? '').trim();
-  if (description.length < rules.descriptionLength.min || description.length > rules.descriptionLength.max) {
-    return fail(`A descrição deve ter de ${rules.descriptionLength.min} a ${rules.descriptionLength.max} caracteres`);
+  if (!between(description.length, rules.descriptionLength)) {
+    throw invalid(`A descrição deve ter de ${rules.descriptionLength.min} a ${rules.descriptionLength.max} caracteres`);
   }
 
   const category = fields.category ?? '';
-  if (!rules.categories.includes(category)) return fail('Escolha uma categoria da lista');
+  if (!rules.categories.includes(category)) throw invalid('Escolha uma categoria da lista');
 
-  const startingPrice = parsePrice(fields.startingPrice, 'preço inicial');
-  if (typeof startingPrice === 'string') return fail(startingPrice);
+  const startingPrice = Number(fields.startingPrice);
+  if (!fields.startingPrice || !Number.isInteger(startingPrice)) throw invalid('Informe o preço inicial em centavos (número inteiro)');
+  if (!between(startingPrice, rules.price)) {
+    throw invalid(`O preço inicial deve ser de ${formatMoney(rules.price.min)} a ${formatMoney(rules.price.max)}`);
+  }
 
   const durationMinutes = Number(fields.durationMinutes);
-  if (!Number.isInteger(durationMinutes) || durationMinutes < rules.durationMinutes.min || durationMinutes > rules.durationMinutes.max) {
-    return fail(`A duração deve ser de ${formatMinutes(rules.durationMinutes.min)} a ${formatMinutes(rules.durationMinutes.max)}`);
+  if (!Number.isInteger(durationMinutes) || !between(durationMinutes, rules.durationMinutes)) {
+    throw invalid(`A duração deve ser de ${formatDuration(rules.durationMinutes.min)} a ${formatDuration(rules.durationMinutes.max)}`);
   }
 
   // The server's clock is the one that counts (RF16). No start time means "as soon as allowed".
   const earliest = now + rules.leadMinutes.min * MINUTE;
-  const latest = now + rules.leadMinutes.max * MINUTE;
   let startsAt = earliest;
   if (fields.startsAt) {
     startsAt = Date.parse(fields.startsAt);
-    if (Number.isNaN(startsAt)) return fail('Horário de início inválido');
-    if (startsAt < earliest) return fail(`O leilão deve começar daqui a pelo menos ${formatMinutes(rules.leadMinutes.min)}`);
-    if (startsAt > latest) return fail(`O leilão deve começar em no máximo ${formatMinutes(rules.leadMinutes.max)}`);
+    if (Number.isNaN(startsAt)) throw invalid('Horário de início inválido');
+    if (startsAt < earliest) throw invalid(`O leilão deve começar daqui a pelo menos ${formatDuration(rules.leadMinutes.min)}`);
+    if (startsAt > now + rules.leadMinutes.max * MINUTE) throw invalid(`O leilão deve começar em no máximo ${formatDuration(rules.leadMinutes.max)}`);
   }
 
-  if (files.length < rules.photos.min || files.length > rules.photos.max) {
-    return fail(`Envie de ${rules.photos.min} a ${rules.photos.max} fotos`);
-  }
-  const photos: { data: Buffer; type: PhotoType }[] = [];
-  for (const [index, data] of files.entries()) {
+  if (!between(files.length, rules.photos)) throw invalid(`Envie de ${rules.photos.min} a ${rules.photos.max} fotos`);
+  const photos = files.map((data, index) => {
     const type = detectPhotoType(data);
-    if (!type || !rules.photos.types.includes(type)) return fail(`A foto ${index + 1} não é uma imagem JPEG, PNG ou WebP`);
-    if (data.length > rules.photos.maxBytes) return fail(`A foto ${index + 1} passa de ${megabytes(rules.photos.maxBytes)}`);
-    photos.push({ data, type });
-  }
+    if (!type || !rules.photos.types.includes(type)) throw invalid(`A foto ${index + 1} não é uma imagem JPEG, PNG ou WebP`);
+    if (data.length > rules.photos.maxBytes) throw invalid(`A foto ${index + 1} passa de ${formatMegabytes(rules.photos.maxBytes)}`);
+    return { data, type };
+  });
 
-  return {
-    ok: true,
-    value: { title, description, category, startingPrice, startsAt, durationMinutes },
-    photos,
-  };
+  return { title, description, category, startingPrice, startsAt, durationMinutes, photos };
 }
 
-export const photoTooLargeMessage = () => `Cada foto pode ter no máximo ${megabytes(config.listing.photos.maxBytes)}`;
-export const tooManyPhotosMessage = () => `Envie no máximo ${config.listing.photos.max} fotos`;
+/** Validates the form, saves the photos (only once everything is valid) and creates the auction. */
+export function createListing(sellerId: number, fields: Record<string, string>, files: Buffer[], now = Date.now()): Auction {
+  const { photos, ...listing } = validateListing(fields, files, now);
+  const urls = savePhotos(photos);
+  try {
+    return createAuction(sellerId, { ...listing, photos: urls });
+  } catch (err) {
+    deletePhotos(urls);
+    throw err;
+  }
+}

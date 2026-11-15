@@ -1,20 +1,19 @@
 <script lang="ts">
-  import { calculateMinIncrement, type Auction, type ListingRules } from '@auction/shared';
+  import { calculateMinIncrement, MINUTE, type Auction, type ListingRules } from '@auction/shared';
   import { onDestroy } from 'svelte';
   import { goto } from '$app/navigation';
   import { api } from '#lib/api.ts';
-  import { auth } from '#lib/auth.svelte.ts';
+  import { auth, requireLogin } from '#lib/auth.svelte.ts';
   import { clock } from '#lib/clock.svelte.ts';
-  import { formatDateTime, formatMoney } from '#lib/format.ts';
+  import TaskMessage from '#lib/components/TaskMessage.svelte';
+  import { formatDateTime, formatDuration, formatMegabytes, formatMoney } from '#lib/format.ts';
   import { loadRules } from '#lib/rules.ts';
+  import { Task } from '#lib/task.svelte.ts';
 
-  const MINUTE = 60 * 1000;
   const DURATION_PRESETS = [3, 5, 10, 15, 30, 60, 3 * 60, 6 * 60, 12 * 60, 24 * 60, 3 * 24 * 60, 7 * 24 * 60];
 
   // Creating auctions requires login (RF03)
-  $effect(() => {
-    if (auth.ready && !auth.user) goto('/login?redirect=/sell', { replace: true });
-  });
+  requireLogin();
 
   // The limits come from the server (RF06), so the form never disagrees with it
   let rules = $state<ListingRules | null>(null);
@@ -36,8 +35,7 @@
   /** `datetime-local` value, in the viewer's timezone. */
   let startLocal = $state('');
   let durationMinutes = $state(24 * 60);
-  let error = $state<string | null>(null);
-  let submitting = $state(false);
+  const publish = new Task();
 
   // --- Photos: kept in order; the first one is the cover
   type Photo = { file: File; preview: string };
@@ -104,31 +102,15 @@
     if (!startLocal) startLocal = toLocalInput(Math.ceil((earliestStart + MINUTE) / (60 * MINUTE)) * 60 * MINUTE);
   }
 
-  function formatMegabytes(bytes: number) {
-    return `${Math.round((bytes / 1024 / 1024) * 10) / 10} MB`;
-  }
-
-  function formatDuration(minutes: number) {
-    if (minutes % (24 * 60) === 0) return minutes === 24 * 60 ? '1 dia' : `${minutes / (24 * 60)} dias`;
-    if (minutes % 60 === 0) return minutes === 60 ? '1 hora' : `${minutes / 60} horas`;
-    return minutes === 1 ? '1 minuto' : `${minutes} minutos`;
-  }
-
   const toCents = (reais: number | null) => Math.round((reais ?? 0) * 100);
 
-  async function submit(event: SubmitEvent) {
+  function submit(event: SubmitEvent) {
     event.preventDefault();
     if (!rules) return;
-    error = null;
-
     if (photos.length < rules.photos.min) {
-      error = `Adicione pelo menos ${rules.photos.min} fotos (você adicionou ${photos.length}).`;
-      return;
+      return publish.fail(`Adicione pelo menos ${rules.photos.min} fotos (você adicionou ${photos.length}).`);
     }
-    if (startMode === 'scheduled' && Number.isNaN(startTime)) {
-      error = 'Escolha a data e o horário de início.';
-      return;
-    }
+    if (startMode === 'scheduled' && Number.isNaN(startTime)) return publish.fail('Escolha a data e o horário de início.');
 
     const form = new FormData();
     form.append('title', title);
@@ -140,15 +122,10 @@
     if (startMode === 'scheduled') form.append('startsAt', new Date(startTime).toISOString());
     for (const photo of photos) form.append('photos', photo.file, photo.file.name);
 
-    submitting = true;
-    try {
+    publish.run(async () => {
       const auction = await api.post<Auction>('/auctions', form);
       await goto(`/auctions/${auction.id}`);
-    } catch (err) {
-      error = (err as Error).message;
-    } finally {
-      submitting = false;
-    }
+    });
   }
 </script>
 
@@ -314,11 +291,9 @@
           {/if}
         </fieldset>
 
-        {#if error}
-          <p class="alert alert-error" role="alert">{error}</p>
-        {/if}
+        <TaskMessage task={publish} />
 
-        <button class="btn btn-primary" disabled={submitting}>{submitting ? 'Publicando…' : 'Publicar leilão'}</button>
+        <button class="btn btn-primary" disabled={publish.pending}>{publish.pending ? 'Publicando…' : 'Publicar leilão'}</button>
       </form>
     {/if}
   </div>

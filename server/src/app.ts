@@ -2,14 +2,15 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
-import Fastify from 'fastify';
+import Fastify, { type FastifyError } from 'fastify';
 import { config } from './config';
-import { registerLifecycle } from './lifecycle';
+import { AppError } from './errors';
+import { registerJobs } from './jobs';
 import authPlugin from './plugins/auth';
 import accountRoutes from './routes/account';
 import auctionRoutes from './routes/auctions';
 import authRoutes from './routes/auth';
-import photoRoutes from './routes/photos';
+import { PHOTO_URL_PREFIX, PHOTOS_DIR } from './services/photos';
 import { registerSocket } from './socket';
 import { formatValidationErrors } from './validation';
 
@@ -19,11 +20,16 @@ export async function buildApp() {
     schemaErrorFormatter: formatValidationErrors,
   });
 
-  // Unexpected errors: log the details, show the user a generic message
-  app.setErrorHandler((error: { statusCode?: number; message: string }, request, reply) => {
+  // Refusals (AppError, invalid requests) are answered with their message; unexpected errors are
+  // logged and the user gets a generic message
+  app.setErrorHandler((error: FastifyError | AppError, request, reply) => {
     const status = error.statusCode ?? 500;
-    if (status >= 500) request.log.error(error);
-    return reply.code(status).send({ message: status >= 500 ? 'Erro interno do servidor. Tente novamente.' : error.message });
+    if (status >= 500) {
+      request.log.error(error);
+      return reply.code(status).send({ message: 'Erro interno do servidor. Tente novamente.' });
+    }
+    if (error instanceof AppError) return reply.code(status).headers(error.headers).send({ message: error.message, ...error.extra });
+    return reply.code(status).send({ message: error.message });
   });
 
   await app.register(cors, { origin: config.corsOrigin });
@@ -34,9 +40,18 @@ export async function buildApp() {
   await app.register(authRoutes, { prefix: '/api/auth' });
   await app.register(accountRoutes, { prefix: '/api/account' });
   await app.register(auctionRoutes, { prefix: '/api/auctions' });
-  await app.register(photoRoutes, { prefix: '/api/photos' });
 
-  registerLifecycle(app);
+  // Uploaded photos, from the VM's disk. Their names are random and never reused, so they're cached for good.
+  await app.register(fastifyStatic, {
+    root: PHOTOS_DIR,
+    prefix: PHOTO_URL_PREFIX,
+    decorateReply: false,
+    maxAge: '365d',
+    immutable: true,
+    setHeaders: (res) => res.header('x-content-type-options', 'nosniff'),
+  });
+
+  registerJobs(app);
 
   // On the VM, this process also serves the built web app, so everything is one service on one
   // port (RNF01). In development the client runs on Vite's dev server instead.

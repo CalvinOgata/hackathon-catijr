@@ -10,7 +10,7 @@ PACKAGE_FILES  := package.json $(wildcard package-lock.json) shared/package.json
 
 .DEFAULT_GOAL := help
 
-.PHONY: help setup dev server client check build start service update logs reset-data clean reset check-node check-ports
+.PHONY: help setup dev server client check test build start service update logs reset-data clean reset check-node check-ports
 
 help: ## Show this help
 	@echo "Usage: make <command>"
@@ -32,6 +32,9 @@ client: setup ## Run only the web client (dev mode)
 
 check: setup ## Type-check server and client
 	npm run check
+
+test: setup ## Run the test suites against a real server (port 3399; takes a few minutes)
+	npm test
 
 build: setup ## Build server and client for production
 	npm run build

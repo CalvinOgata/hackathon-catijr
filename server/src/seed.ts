@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import type { Category } from '@auction/shared';
-import { cancelAuction, createAuction, placeBid } from './services/auctions';
-import { savePhotos } from './services/photos';
+import { cancelAuction, createAuction, itemsWithOutsidePhotos, placeBid, replaceItemPhotos } from './services/auctions';
+import { PHOTO_URL_PREFIX, savePhotos } from './services/photos';
 import { hashPassword } from './services/passwords';
 import { createUser } from './services/users';
 
@@ -113,4 +113,20 @@ export async function seed() {
   // live at that moment, time between bids), so the sample data can't break them
   bids.sort((a, b) => a.at - b.at);
   for (const [n, bid] of bids.entries()) placeBid(bid.auctionId, buyers[bid.buyer], bid.amount, `seed-${n}`, bid.at);
+}
+
+/**
+ * Data saved by older versions links the sample auctions' photos to picsum.photos, an outside
+ * site that stopped answering (error 522 after a long wait), so they never loaded. On start,
+ * those items get the local copies from seed-photos/ instead (matched by title); any other
+ * outside link is dropped, and the page shows its placeholder. Nothing else changes.
+ * Returns how many items were fixed.
+ */
+export function localizeSamplePhotos(): number {
+  const items = itemsWithOutsidePhotos();
+  for (const item of items) {
+    const sample = AUCTIONS.findIndex((auction) => auction.title === item.title) + 1;
+    replaceItemPhotos(item.id, sample ? samplePhotos(sample) : item.photos.filter((url) => url.startsWith(PHOTO_URL_PREFIX)));
+  }
+  return items.length;
 }

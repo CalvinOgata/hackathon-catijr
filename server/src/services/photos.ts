@@ -1,26 +1,19 @@
 import { randomBytes } from 'node:crypto';
 import { mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { config } from '../config';
 
 // Uploaded photos are files on the VM's disk (managers' rule; RF07's cloud storage is not used),
-// served back by the API at /api/photos/<name>.
+// under random names, served as static files at /api/photos/<name> (see app.ts).
 
-const DIR = join(config.dataDir, 'photos');
+export const PHOTOS_DIR = resolve(config.dataDir, 'photos');
 export const PHOTO_URL_PREFIX = '/api/photos/';
 
-const TYPES = {
-  'image/jpeg': 'jpg',
-  'image/png': 'png',
-  'image/webp': 'webp',
-} as const;
+mkdirSync(PHOTOS_DIR, { recursive: true });
 
-export type PhotoType = keyof typeof TYPES;
+const EXTENSIONS = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' } as const;
 
-/** Names we generate: 32 hex characters and a known extension. Anything else is never served. */
-const NAME_PATTERN = /^[a-f0-9]{32}\.(jpg|png|webp)$/;
-
-const MIME_BY_EXTENSION: Record<string, PhotoType> = { jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp' };
+export type PhotoType = keyof typeof EXTENSIONS;
 
 /**
  * The real type of an upload, read from its first bytes. The file name and the type the
@@ -35,12 +28,11 @@ export function detectPhotoType(data: Buffer): PhotoType | null {
 
 /** Saves photos under random names and returns their URLs, in the same order. */
 export function savePhotos(photos: { data: Buffer; type: PhotoType }[]): string[] {
-  mkdirSync(DIR, { recursive: true });
   const urls: string[] = [];
   try {
     for (const photo of photos) {
-      const name = `${randomBytes(16).toString('hex')}.${TYPES[photo.type]}`;
-      writeFileSync(join(DIR, name), photo.data);
+      const name = `${randomBytes(16).toString('hex')}.${EXTENSIONS[photo.type]}`;
+      writeFileSync(join(PHOTOS_DIR, name), photo.data);
       urls.push(PHOTO_URL_PREFIX + name);
     }
   } catch (err) {
@@ -50,22 +42,13 @@ export function savePhotos(photos: { data: Buffer; type: PhotoType }[]): string[
   return urls;
 }
 
-/** Removes uploaded photos (only ones we stored; external URLs are ignored). */
+/** Removes photos saved by `savePhotos`, e.g. when creating the auction failed. */
 export function deletePhotos(urls: string[]) {
   for (const url of urls) {
-    const path = photoPath(url.slice(PHOTO_URL_PREFIX.length));
-    if (!url.startsWith(PHOTO_URL_PREFIX) || !path) continue;
     try {
-      unlinkSync(path);
+      unlinkSync(join(PHOTOS_DIR, basename(url)));
     } catch {
       // Already gone
     }
   }
 }
-
-/** The file for a photo name, or null if the name isn't one we could have generated. */
-export function photoPath(name: string): string | null {
-  return NAME_PATTERN.test(name) ? join(DIR, name) : null;
-}
-
-export const photoMimeType = (name: string): PhotoType => MIME_BY_EXTENSION[name.split('.').pop()!]!;

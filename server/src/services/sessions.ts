@@ -1,6 +1,8 @@
 import { createHash, randomBytes } from 'node:crypto';
+import { SESSION_INVALID } from '@auction/shared';
 import { config } from '../config';
-import { saveStore } from '../persistence';
+import { AppError } from '../errors';
+import { transaction } from '../persistence';
 import { nextId, store, type SessionRecord } from '../store';
 
 export interface Session {
@@ -12,6 +14,10 @@ export interface Session {
 const PERSIST_RENEWAL_MS = Math.min(60 * 1000, config.session.idleTimeoutMs / 10);
 
 const hashToken = (token: string) => createHash('sha256').update(token).digest('hex');
+
+export const sessionExpired = () => new AppError(401, 'Sua sessão expirou. Entre novamente.', { code: SESSION_INVALID });
+
+export const isExpired = (session: SessionRecord, now = Date.now()) => now >= session.expiresAt;
 
 /** Starts a session and returns the opaque token the client must send back. */
 export function createSession(userId: number): string {
@@ -25,82 +31,40 @@ export function createSession(userId: number): string {
     expiresAt: now + config.session.idleTimeoutMs,
     absoluteExpiresAt: now + config.session.maxLifetimeMs,
   };
-  store.sessions.set(session.id, session);
-  store.sessionIdsByTokenHash.set(session.tokenHash, session.id);
-  saveStore();
+  transaction(() => {
+    store.sessions.set(session.id, session);
+    store.sessionIdsByTokenHash.set(session.tokenHash, session.id);
+  });
   return token;
 }
 
 /**
- * Checks a session and, because it is being used, extends its idle timeout.
- * Returns null (and forgets the session) once it has expired.
+ * Checks a session (by token or id) and, because it is being used, extends its idle timeout.
+ * Returns null once it has expired; the sweep (jobs.ts) removes it and ends its connections.
  */
-function use(session: SessionRecord | undefined): Session | null {
-  if (!session) return null;
+export function useSession(by: { token: string } | { id: number }): Session | null {
+  const id = 'id' in by ? by.id : store.sessionIdsByTokenHash.get(hashToken(by.token));
+  const session = id === undefined ? undefined : store.sessions.get(id);
+  if (!session || isExpired(session)) return null;
 
-  const now = Date.now();
-  if (now >= session.expiresAt) {
-    deleteSession(session.id);
-    return null;
-  }
-
-  const renewed = Math.min(now + config.session.idleTimeoutMs, session.absoluteExpiresAt);
-  const persist = renewed - session.expiresAt > PERSIST_RENEWAL_MS;
-  session.expiresAt = renewed;
-  if (persist) saveStore();
+  const renewed = Math.min(Date.now() + config.session.idleTimeoutMs, session.absoluteExpiresAt);
+  if (renewed - session.expiresAt > PERSIST_RENEWAL_MS) transaction(() => (session.expiresAt = renewed));
+  else session.expiresAt = renewed;
 
   const user = store.users.get(session.userId)!;
   return { id: session.id, user: { id: user.id, name: user.name } };
 }
 
-export function useSessionByToken(token: string): Session | null {
-  const id = store.sessionIdsByTokenHash.get(hashToken(token));
-  return use(id === undefined ? undefined : store.sessions.get(id));
-}
-
-export function useSessionById(id: number): Session | null {
-  return use(store.sessions.get(id));
-}
-
-/** Checks a session without counting it as use (for background sweeps). */
-export function isSessionActive(id: number): boolean {
-  const session = store.sessions.get(id);
-  return !!session && Date.now() < session.expiresAt;
-}
-
-function removeSession(id: number): boolean {
-  const session = store.sessions.get(id);
-  if (!session) return false;
-  store.sessions.delete(id);
-  store.sessionIdsByTokenHash.delete(session.tokenHash);
-  return true;
-}
-
-export function deleteSession(id: number) {
-  if (removeSession(id)) saveStore();
-}
-
-/**
- * Ends every session of a user, except `keepSessionId` if given (e.g. the one changing the
- * password). Returns the ended ids.
- */
-export function deleteUserSessions(userId: number, keepSessionId?: number): number[] {
-  const ended: number[] = [];
-  for (const session of store.sessions.values()) {
-    if (session.userId === userId && session.id !== keepSessionId) {
-      removeSession(session.id);
-      ended.push(session.id);
-    }
+/** Ends the sessions that match and returns their ids (logout, password change, deleted account, expiry). */
+export function deleteSessions(match: (session: SessionRecord) => boolean): number[] {
+  const ended = [...store.sessions.values()].filter(match);
+  if (ended.length) {
+    transaction(() => {
+      for (const session of ended) {
+        store.sessions.delete(session.id);
+        store.sessionIdsByTokenHash.delete(session.tokenHash);
+      }
+    });
   }
-  if (ended.length) saveStore();
-  return ended;
-}
-
-export function deleteExpiredSessions() {
-  const now = Date.now();
-  let removed = false;
-  for (const session of store.sessions.values()) {
-    if (now >= session.expiresAt) removed = removeSession(session.id) || removed;
-  }
-  if (removed) saveStore();
+  return ended.map((session) => session.id);
 }

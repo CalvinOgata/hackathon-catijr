@@ -1,25 +1,10 @@
 import type { AuthResponse, PublicUser } from '@auction/shared';
-import { api, onSessionInvalid, setApiToken } from './api.ts';
-import { setSocketToken, socket } from './socket.svelte.ts';
+import { goto } from '$app/navigation';
+import { api, onSessionInvalid, setAuthToken } from './api.ts';
+import { reconnectSocket, socket } from './socket.svelte.ts';
+import { readStored, writeStored } from './storage.ts';
 
 const TOKEN_KEY = 'auth_token';
-
-function storeToken(token: string | null) {
-  try {
-    if (token) localStorage.setItem(TOKEN_KEY, token);
-    else localStorage.removeItem(TOKEN_KEY);
-  } catch {
-    // Storage unavailable (private mode): the session just won't persist
-  }
-}
-
-function readToken(): string | null {
-  try {
-    return localStorage.getItem(TOKEN_KEY);
-  } catch {
-    return null;
-  }
-}
 
 class Auth {
   user = $state<PublicUser | null>(null);
@@ -35,7 +20,7 @@ class Auth {
   }
 
   async init() {
-    const token = readToken();
+    const token = readStored<string>('local', TOKEN_KEY);
     if (token) {
       this.#setToken(token);
       try {
@@ -95,10 +80,20 @@ class Auth {
   }
 
   #setToken(token: string | null) {
-    storeToken(token);
-    setApiToken(token);
-    setSocketToken(token);
+    writeStored('local', TOKEN_KEY, token);
+    setAuthToken(token);
+    reconnectSocket();
   }
 }
 
 export const auth = new Auth();
+
+/**
+ * For pages that need login (call while the component initializes): guests go to the login page
+ * and come back here after. `unless` skips it, e.g. right after deleting the account.
+ */
+export function requireLogin(unless: () => boolean = () => false) {
+  $effect(() => {
+    if (auth.ready && !auth.user && !unless()) goto(`/login?redirect=${encodeURIComponent(location.pathname)}`, { replace: true });
+  });
+}

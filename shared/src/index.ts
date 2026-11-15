@@ -1,6 +1,26 @@
 // Types and logic shared between the server and the client.
 // All money values are integers in cents.
 
+export const MINUTE = 60 * 1000;
+
+const money = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
+
+/** e.g. "R$ 1.234,56". */
+export const formatMoney = (cents: number) => money.format(cents / 100);
+
+const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
+
+/** A limit or rule as text, e.g. "1 dia", "3 horas", "30 minutos", "30 segundos" (demo settings go below a minute). */
+export function formatDuration(minutes: number): string {
+  if (minutes < 1) return plural(Math.round(minutes * 60), 'segundo', 'segundos');
+  if (minutes % (24 * 60) === 0) return plural(minutes / (24 * 60), 'dia', 'dias');
+  if (minutes % 60 === 0) return plural(minutes / 60, 'hora', 'horas');
+  return plural(minutes, 'minuto', 'minutos');
+}
+
+/** e.g. "5 MB", "2.5 MB". */
+export const formatMegabytes = (bytes: number) => `${Math.round((bytes / 1024 / 1024) * 10) / 10} MB`;
+
 export interface PublicUser {
   id: number;
   name: string;
@@ -60,7 +80,7 @@ export type Category = (typeof CATEGORIES)[number];
  * E.g. "Carlos Eduardo da Silva" -> "Carlos S.", "Calvin" -> "C***n"
  */
 export function maskBidderName(name: string): string {
-  const trimmed = name.trim().replace(/\s+/g, ' ');
+  const trimmed = normalizeDisplayName(name);
   if (!trimmed) return 'Anônimo';
   const parts = trimmed.split(' ');
   if (parts.length >= 2) {
@@ -116,26 +136,30 @@ export const AUCTION_STATUS_LABELS: Record<AuctionStatus, string> = {
   cancelled: 'Cancelado',
 };
 
-type StatusFields = Pick<Auction, 'startsAt' | 'endsAt' | 'bidCount' | 'cancelledAt'>;
+/** Times as the API sends them (ISO text) or as the server stores them (epoch ms). */
+type Time = string | number;
+
+type StatusFields = { startsAt: Time; endsAt: Time; bidCount: number; cancelledAt: Time | null };
+
+const ms = (time: Time) => (typeof time === 'number' ? time : Date.parse(time));
 
 /** An auction's state at a given moment. The server's answer is the one that counts (RF16). */
 export function auctionStatus(auction: StatusFields, now: number): AuctionStatus {
-  if (auction.cancelledAt) return 'cancelled';
-  if (now < Date.parse(auction.startsAt)) return 'scheduled';
-  if (now < Date.parse(auction.endsAt)) return 'live';
+  if (auction.cancelledAt !== null) return 'cancelled';
+  if (now < ms(auction.startsAt)) return 'scheduled';
+  if (now < ms(auction.endsAt)) return 'live';
   return auction.bidCount > 0 ? 'sold' : 'unsold';
 }
 
 /** Scheduled or live: the auctions the public listing shows (RF20). */
-export const isOpenStatus = (status: AuctionStatus) => status === 'scheduled' || status === 'live';
+export const isOpenStatus = (status: AuctionStatus): status is 'scheduled' | 'live' => status === 'scheduled' || status === 'live';
 
 /**
  * Team decision (RF20): the order of the public listing. Live auctions first, ending soonest on
  * top (they're the ones that need attention now), then scheduled ones, starting soonest.
  */
 export function listingOrder(a: StatusFields, b: StatusFields, now: number): number {
-  const key = (auction: StatusFields) =>
-    auctionStatus(auction, now) === 'live' ? [0, Date.parse(auction.endsAt)] : [1, Date.parse(auction.startsAt)];
+  const key = (auction: StatusFields) => (auctionStatus(auction, now) === 'live' ? [0, ms(auction.endsAt)] : [1, ms(auction.startsAt)]);
   const [groupA, timeA] = key(a);
   const [groupB, timeB] = key(b);
   return groupA - groupB || timeA - timeB;
@@ -197,23 +221,10 @@ export interface ListingRules {
   extension: { windowMinutes: number; maxMinutes: number };
 }
 
-/** Text fields of the "create auction" form (sent as multipart, next to the `photos` files). */
-export interface CreateAuctionFields {
-  title: string;
-  description: string;
-  category: string;
-  startingPrice: number;
-  /** ISO date; omitted means "as soon as allowed". */
-  startsAt?: string;
-  durationMinutes: number;
-}
-
 /** Sent (HTTP 401 body or socket ack) when the session is missing, expired or was logged out. */
 export const SESSION_INVALID = 'SESSION_INVALID';
 
-export type Failure = { ok: false; error: string; code?: typeof SESSION_INVALID };
-
-export type BidFailureCode =
+export type FailureCode =
   | typeof SESSION_INVALID
   | 'RATE_LIMITED'
   | 'BELOW_MINIMUM'
@@ -225,18 +236,14 @@ export type BidFailureCode =
   | 'ALREADY_LEADER'
   | 'INVALID_BID';
 
-export type BidFailure = {
-  ok: false;
-  error: string;
-  code?: BidFailureCode;
-  currentMinBid?: number;
-};
+/** Why something sent over the live connection was refused. Bid refusals also tell the current minimum (RF10). */
+export type Failure = { ok: false; error: string; code?: FailureCode; currentMinBid?: number };
 
 /**
  * `bid` is the accepted bid. When the same bid is sent again (same `idempotencyKey`), it's the
  * original one and nothing new is created (RF12); `auction` is always the current state.
  */
-export type BidResult = { ok: true; auction: Auction; bid: Bid } | BidFailure;
+export type BidResult = { ok: true; auction: Auction; bid: Bid } | Failure;
 
 /** The highest bid accepted, in cents (R$ 100.000.000,00, the highest starting price), so amounts stay exact. */
 export const MAX_BID = 100_000_000_00;
@@ -248,15 +255,12 @@ export const IDEMPOTENCY_KEY_MAX_LENGTH = 100;
 export type RoomMode = 'participant' | 'spectator';
 
 /**
- * Returned by room:join and room:upgrade. `mode` is the role the server gave (a seller always
- * watches their own auction); `viewerTag` is the `bidderTag` your bids have in this auction.
+ * Returned by room:join. `mode` is the role the server gave (a seller always watches their own
+ * auction); `viewerTag` is the `bidderTag` your bids have in this auction.
  */
 export type JoinRoomResult = { ok: true; auction: AuctionDetail; mode: RoomMode; viewerTag: string } | Failure;
 
-/**
- * Live headcount emitted to all room members whenever someone enters, leaves,
- * or upgrades from spectator to participant (RF25).
- */
+/** Live headcount sent to the room whenever someone enters, leaves or changes role (RF25). */
 export interface RoomPresence {
   auctionId: number;
   /** People who can bid (several tabs of one user count once). */
@@ -281,10 +285,11 @@ export interface ServerToClientEvents {
 export interface ClientToServerEvents {
   /** Anyone: the server's current time (epoch ms), so countdowns follow the server's clock (RF16). */
   'clock:sync': (ack: (serverNow: number) => void) => void;
-  /** RF04 / RF25: join as spectator or participant. Login is required either way. */
+  /**
+   * RF04 / RF25: join as spectator or participant. Login is required either way. Joining again
+   * changes the role without leaving the room (e.g. a spectator becoming a participant).
+   */
   'room:join': (auctionId: number, mode: RoomMode, ack: (result: JoinRoomResult) => void) => void;
-  /** RF25: promote from spectator to participant without leaving the room. */
-  'room:upgrade': (auctionId: number, ack: (result: JoinRoomResult) => void) => void;
   /** Leaves the auction's room, whichever the mode. */
   'room:leave': (auctionId: number) => void;
   /** `idempotencyKey`: one per bid intent, reused when re-sending it (RF12). */
