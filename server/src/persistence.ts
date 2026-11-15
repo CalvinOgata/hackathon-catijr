@@ -1,7 +1,7 @@
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 import { config } from './config';
-import { bidKey, restoreIds, store, type AuctionRecord, type BidRecord, type ItemRecord, type SessionRecord, type UserRecord } from './store';
+import { restoreIds, store, type AuctionRecord, type BidRecord, type ItemRecord, type SessionRecord, type UserRecord } from './store';
 
 // The store is saved as one JSON file on the VM's disk (managers' rule: no database, no cloud).
 //
@@ -25,36 +25,31 @@ interface Snapshot {
   sessions: SessionRecord[];
 }
 
+/** The store as last written to disk; a failed save goes back to it. */
+let saved: string | null = null;
+
 const maxId = (records: { id: number }[]) => records.reduce((max, r) => Math.max(max, r.id), 0);
 
-/** Fills the store from disk. Returns false when there's no saved data yet (first start). */
-export function loadStore(): boolean {
-  if (!existsSync(FILE)) return false;
+/** Replaces the store's contents (and its indexes) with a saved snapshot, or empties it. */
+function hydrate(json: string | null) {
+  const data: Snapshot = json ? JSON.parse(json) : { version: VERSION, users: [], items: [], auctions: [], bids: [], sessions: [] };
+  if (data.version !== VERSION) {
+    throw new Error(`${FILE} was saved by another version of the app. Run "make reset-data" to start over with the sample data.`);
+  }
 
-  const data = JSON.parse(readFileSync(FILE, 'utf8')) as Snapshot;
-  if (data.version !== VERSION) throw new Error(`Unsupported ${FILE} version ${data.version}`);
-
+  for (const map of [store.users, store.userIdsByEmail, store.items, store.auctions, store.bidsByAuction, store.sessions, store.sessionIdsByTokenHash]) {
+    map.clear();
+  }
   for (const user of data.users) {
-    user.deletedAt ??= null; // saved before accounts could be deleted
     store.users.set(user.id, user);
     if (user.deletedAt === null) store.userIdsByEmail.set(user.email, user.id);
   }
   for (const item of data.items) store.items.set(item.id, item);
   for (const auction of data.auctions) {
-    auction.cancelledAt ??= null; // saved before cancelling existed
-    delete (auction as { minIncrement?: number }).minIncrement; // sellers used to choose it; now it's the RF14 table
-    // Saved before RF15/RF17: never extended, and transitions not recorded yet (the job does it on start)
-    auction.originalEndsAt ??= auction.endsAt;
-    auction.openedAt ??= null;
-    auction.closedAt ??= null;
     store.auctions.set(auction.id, auction);
     store.bidsByAuction.set(auction.id, []);
   }
-  for (const bid of data.bids.sort((a, b) => a.id - b.id)) {
-    bid.idempotencyKey ??= null; // saved before bids had one
-    store.bidsByAuction.get(bid.auctionId)!.push(bid);
-    if (bid.idempotencyKey !== null) store.bidsByKey.set(bidKey(bid.userId, bid.auctionId, bid.idempotencyKey), bid);
-  }
+  for (const bid of data.bids.sort((a, b) => a.id - b.id)) store.bidsByAuction.get(bid.auctionId)!.push(bid);
   for (const session of data.sessions) {
     store.sessions.set(session.id, session);
     store.sessionIdsByTokenHash.set(session.tokenHash, session.id);
@@ -67,28 +62,53 @@ export function loadStore(): boolean {
     bid: maxId(data.bids),
     session: maxId(data.sessions),
   });
+  saved = json;
+}
+
+/** Fills the store from disk. Returns false when there's no saved data yet (first start). */
+export function loadStore(): boolean {
+  if (!existsSync(FILE)) return false;
+  hydrate(readFileSync(FILE, 'utf8'));
   return true;
 }
 
-/** Writes the whole store to disk. Call it after every change, before answering. */
-export function saveStore() {
-  const snapshot: Snapshot = {
+function write(json: string) {
+  mkdirSync(config.dataDir, { recursive: true });
+  const temp = `${FILE}.tmp`;
+  const fd = openSync(temp, 'w');
+  try {
+    writeSync(fd, json);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  renameSync(temp, FILE);
+}
+
+/**
+ * Applies a change to the store and saves it to disk, before anyone is told about it. If saving
+ * fails, the store goes back to what is on disk and the error is thrown: an unsaved change never
+ * stays in memory, where it would be saved silently with the next one.
+ *
+ * Every write goes through here. `change` should only write: run the checks before, so a refusal
+ * doesn't cost a save.
+ */
+export function transaction<T>(change: () => T): T {
+  const result = change();
+  const json = JSON.stringify({
     version: VERSION,
     users: [...store.users.values()],
     items: [...store.items.values()],
     auctions: [...store.auctions.values()],
     bids: [...store.bidsByAuction.values()].flat(),
     sessions: [...store.sessions.values()],
-  };
-
-  mkdirSync(config.dataDir, { recursive: true });
-  const temp = `${FILE}.tmp`;
-  const fd = openSync(temp, 'w');
+  } satisfies Snapshot);
   try {
-    writeSync(fd, JSON.stringify(snapshot));
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
+    write(json);
+  } catch (err) {
+    hydrate(saved);
+    throw err;
   }
-  renameSync(temp, FILE);
+  saved = json;
+  return result;
 }

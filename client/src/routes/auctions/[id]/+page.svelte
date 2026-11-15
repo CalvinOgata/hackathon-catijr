@@ -5,7 +5,7 @@
   import { auth } from '#lib/auth.svelte.ts';
   import AuctionHero from '#lib/components/AuctionHero.svelte';
   import { AuctionRoom } from '#lib/room.svelte.ts';
-  import { socket } from '#lib/socket.svelte.ts';
+  import { listen } from '#lib/socket.svelte.ts';
 
   let auction = $state<Auction | null>(null);
   let error = $state<string | null>(null);
@@ -40,13 +40,11 @@
     return () => current.leave();
   });
 
-  $effect(() => {
-    const onUpdated = (update: Auction) => {
+  $effect(() =>
+    listen('auction:updated', (update) => {
       if (update.id === id) auction = update;
-    };
-    socket.on('auction:updated', onUpdated);
-    return () => socket.off('auction:updated', onUpdated);
-  });
+    }),
+  );
 </script>
 
 <svelte:head>

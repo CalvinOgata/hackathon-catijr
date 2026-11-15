@@ -2,9 +2,10 @@
 // written to a JSON file on the VM's disk (see persistence.ts) and read back on start,
 // so the data survives restarts. There is no database or cloud storage.
 //
-// The services are the only code that touches these maps. Node runs JavaScript on a
-// single thread, so a synchronous read-check-write in a service can't interleave with
-// another request: there are no partial updates to guard against.
+// The services are the only code that touches these maps, and every write goes through
+// `transaction` (persistence.ts). Node runs JavaScript on a single thread, so a synchronous
+// read-check-write in a service can't interleave with another request: there are no partial
+// updates to guard against.
 
 export interface UserRecord {
   id: number;
@@ -69,9 +70,6 @@ export interface BidRecord {
   idempotencyKey: string | null;
 }
 
-/** Index key of a bid sent with an idempotency key: the same key only matches the same user and auction. */
-export const bidKey = (userId: number, auctionId: number, idempotencyKey: string) => `${userId}:${auctionId}:${idempotencyKey}`;
-
 export interface SessionRecord {
   id: number;
   userId: number;
@@ -98,8 +96,6 @@ export const store = {
   auctions: new Map<number, AuctionRecord>(),
   /** Oldest first. */
   bidsByAuction: new Map<number, BidRecord[]>(),
-  /** See `bidKey`. */
-  bidsByKey: new Map<string, BidRecord>(),
   sessions: new Map<number, SessionRecord>(),
   sessionIdsByTokenHash: new Map<string, number>(),
   /** Keyed by normalized email, whether or not an account exists for it. */

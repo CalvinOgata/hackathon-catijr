@@ -4,6 +4,7 @@
   import { clock } from '#lib/clock.svelte.ts';
   import { formatMoney } from '#lib/format.ts';
   import { socket } from '#lib/socket.svelte.ts';
+  import { readStored, writeStored } from '#lib/storage.ts';
 
   /** `leading`: the logged-in user has the highest bid (known from the room). */
   let { auction, leading }: { auction: Auction; leading: boolean } = $props();
@@ -129,36 +130,19 @@
     return Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
   }
 
-  function readPending(): Pending | null {
-    try {
-      return JSON.parse(sessionStorage.getItem(storageKey()) ?? 'null');
-    } catch {
-      return null;
-    }
-  }
-
-  function writePending(pending: Pending | null) {
-    try {
-      if (pending) sessionStorage.setItem(storageKey(), JSON.stringify(pending));
-      else sessionStorage.removeItem(storageKey());
-    } catch {
-      // Storage unavailable (private mode): retries still work while the page stays open
-    }
-  }
-
-  let pending: Pending | null = readPending();
+  let pending = readStored<Pending>('session', storageKey());
 
   function keyFor(cents: number): string {
     if (pending?.amount !== cents) {
       pending = { key: newKey(), amount: cents };
-      writePending(pending);
+      writeStored('session', storageKey(), pending);
     }
     return pending.key;
   }
 
   function settle() {
     pending = null;
-    writePending(null);
+    writeStored('session', storageKey(), null);
   }
 
   async function submit(event: SubmitEvent) {

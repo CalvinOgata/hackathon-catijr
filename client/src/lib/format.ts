@@ -1,6 +1,4 @@
-const money = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
-
-export const formatMoney = (cents: number) => money.format(cents / 100);
+export { formatDuration, formatMegabytes, formatMoney } from '@auction/shared';
 
 const longDate = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'long' });
 
@@ -29,9 +27,6 @@ const time = new Intl.DateTimeFormat('pt-BR', { timeStyle: 'short' });
 
 /** e.g. "18:05", in the viewer's own timezone (RF19). */
 export const formatTime = (iso: string) => time.format(new Date(iso));
-
-/** A rule's duration, e.g. "2 min" or "30 s" (demo settings can go below a minute). */
-export const formatMinutes = (minutes: number) => (minutes < 1 ? `${Math.round(minutes * 60)} s` : `${minutes} min`);
 
 export function formatTimeAgo(iso: string, now = Date.now()): string {
   const seconds = Math.max(0, Math.floor((now - Date.parse(iso)) / 1000));

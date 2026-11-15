@@ -2,10 +2,13 @@ import { SESSION_INVALID } from '@auction/shared';
 
 export const API_URL: string = import.meta.env.VITE_API_URL ?? '';
 
-let authToken: string | null = null;
+let token: string | null = null;
 
-export function setApiToken(token: string | null) {
-  authToken = token;
+/** The session token sent with every request and live connection. */
+export const authToken = () => token;
+
+export function setAuthToken(value: string | null) {
+  token = value;
 }
 
 let sessionInvalidHandler: (() => void) | null = null;
@@ -28,7 +31,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   const headers: Record<string, string> = {};
   const isForm = body instanceof FormData; // the browser sets the multipart boundary itself
   if (body !== undefined && !isForm) headers['Content-Type'] = 'application/json';
-  if (authToken) headers.Authorization = `Bearer ${authToken}`;
+  if (token) headers.Authorization = `Bearer ${token}`;
 
   let res: Response;
   try {

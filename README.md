@@ -74,6 +74,7 @@ Run `make` to list them all.
 | `make server`   | Only the API server                                          |
 | `make client`   | Only the web client                                          |
 | `make check`    | Type-check server and client                                 |
+| `make test`     | Run the test suites against a real server (see **Tests**)    |
 | `make build`    | Build server (`server/dist`) and client (`client/build`)     |
 | `make start`    | Build and run the production build (site + API on port 3333) |
 | `make service`  | On the VM: build and install/restart the systemd service     |
@@ -109,7 +110,7 @@ The Makefile only wraps npm scripts, so `npm run dev`, `npm run build`, etc. sti
 | **RF17 / RF18** · Auctions open and close by themselves, also across restarts; closing twice never duplicates anything; no bid after the close. | **Team decision:** an auction's state is always **computed from its times, bids and cancellation**, never stored as a flag that a job has to flip. So it's right at any moment, after any restart, and no bid can land after the end (it's checked in the same step that records the bid, which can't interleave with anything). A **lifecycle job** (`server/src/lifecycle.ts`, every second and on start) announces each opening and closing to everyone and records it once (`openedAt`, `closedAt`), so it runs exactly once even if the server was down at the time. We chose this over a job that changes states because there's no window in which the stored state is wrong. |
 | **RF19** · No rounding errors; times right in every timezone. | Money is always whole cents (integers). Times are stored as instants and sent as ISO 8601 UTC; the screens show them in the viewer's own timezone. |
 | **RF20** · A public page lists scheduled and live auctions and leads to each one's page and room. | **Team decision:** the home page shows **only open auctions** (ended and cancelled ones keep their page, by link): **live first, ending soonest on top** (they need attention now), **then scheduled, starting soonest**. With many auctions it loads **12 at a time** ("Carregar mais"), filtered by search and category on the server; auctions that close or are cancelled leave the page live, and new ones appear in their place. |
-| **RF25** · Spectators and headcount. | Everyone enters a room as a spectator, the seller included: spectators see everything live but can't bid. "Participar do leilão" makes them a participant without leaving the room (`room:upgrade`); the seller can only watch their own auction. The room shows how many participants and spectators are in it, counting people rather than connections (someone watching in one tab and bidding in another is a participant) and updating when anyone joins, upgrades, leaves, closes the tab or logs out. A participant who reconnects comes back as a participant. |
+| **RF25** · Spectators and headcount. | Everyone enters a room as a spectator, the seller included: spectators see everything live but can't bid. "Participar do leilão" makes them a participant without leaving the room (joining again as a participant); the seller can only watch their own auction. The room shows how many participants and spectators are in it, counting people rather than connections (someone watching in one tab and bidding in another is a participant) and updating when anyone joins, upgrades, leaves, closes the tab or logs out. A participant who reconnects comes back as a participant. |
 | **RNF01 / RNF03** · Everything runs on the VM and can be recreated from this README. | **Team decision:** one Node process (site + API + WebSocket + lifecycle job) under systemd, data on the VM's disk; see **Publishing on the VM**. One process keeps the in-memory guarantees simple (RF11) and there's nothing else to install. |
 | **RNF04** · Demo data. | See **Demo data** below. |
 
@@ -181,14 +182,13 @@ Anyone can connect (to receive public listing updates). Send the session token i
 | Direction            | Event             | Payload                                                    |
 | -------------------- | ----------------- | ---------------------------------------------------------- |
 | client → server      | `clock:sync`      | ack → the server's time (epoch ms); anyone. The client measures the difference to its own clock on every connect and every 10 minutes, so countdowns and statuses follow the server's clock (RF16) even when the browser's is wrong |
-| client → server      | `room:join`       | `auctionId, mode` (`'participant'` or `'spectator'`), ack → `{ ok, auction, mode, viewerTag }` with recent bids; `mode` is the role given (a seller always watches their own auction), `viewerTag` is your `bidderTag` in this auction (session required). Joining again moves the connection to the new mode's room |
-| client → server      | `room:upgrade`    | `auctionId`, ack like `room:join`: a spectator becomes a participant without leaving the room (RF25) |
+| client → server      | `room:join`       | `auctionId, mode` (`'participant'` or `'spectator'`), ack → `{ ok, auction, mode, viewerTag }` with recent bids; `mode` is the role given (a seller always watches their own auction), `viewerTag` is your `bidderTag` in this auction (session required). Joining again changes the role without leaving the room: that's how a spectator becomes a participant (RF25) |
 | client → server      | `room:leave`      | `auctionId` (whichever the mode)                            |
-| client → server      | `bid:place`       | `{ auctionId, amount, idempotencyKey? }`, ack → `{ ok: true, auction, bid }` or `{ ok: false, error, code?, currentMinBid? }` (session + room required) |
+| client → server      | `bid:place`       | `{ auctionId, amount, idempotencyKey? }`, ack → `{ ok: true, auction, bid }` or `{ ok: false, error, code?, currentMinBid? }` (session required, as a participant) |
 | server → everyone    | `auction:created` | new listing                                                |
 | server → everyone    | `auction:updated` | listing after a bid (price, bid count — no bidder)         |
 | server → room        | `room:bid`        | `{ auction, bid }` with the bidder's masked name and tag, to participants and spectators |
-| server → room        | `room:presence`   | `{ auctionId, participants, spectators }`: people (not tabs) in the room, sent whenever someone joins, upgrades, leaves, disconnects or logs out (RF25) |
+| server → room        | `room:presence`   | `{ auctionId, participants, spectators }`: people (not tabs) in the room, sent whenever someone joins, changes role, leaves, disconnects or logs out (RF25) |
 | server → connection  | `session:expired` | the session ended; the connection was removed from all rooms |
 
 The event types live in `shared/src/index.ts`, so both ends are type-checked against the same contract.
@@ -213,17 +213,37 @@ By the organizers' rule there is no database and no cloud storage: everything is
 
 - **Data** (users, sessions, items, auctions, bids) lives in memory while the server runs (`server/src/store.ts`)
   and is saved to `server/data/store.json` **after every change, before the request is answered or anyone is notified**
-  (`server/src/persistence.ts`). The file is written to a temporary file, flushed to disk and then renamed over the old
-  one, so a crash never leaves it half-written. On start the server loads it back, so **restarts keep everything**,
-  including logins. Only passwords' hashes and sessions' token hashes are on disk.
-- **Photos** are files in `server/data/photos/` with random names, served by the API at `/api/photos/<name>`.
-  Only names the server generated are served, so no other file can be requested.
+  (`server/src/persistence.ts`). Every write goes through one `transaction()`: if saving fails, memory goes back to
+  what is on disk, so a change nobody was told about is never saved later by accident. The file is written to a
+  temporary file, flushed to disk and then renamed over the old one, so a crash never leaves it half-written. On start
+  the server loads it back, so **restarts keep everything**, including logins. Only passwords' hashes and sessions'
+  token hashes are on disk.
+- **Photos** are files in `server/data/photos/` with random names, served as static files at `/api/photos/<name>`
+  (cached for good, since a name is never reused). Only files in that folder can be requested.
 - `server/data/` is ignored by git. The location can be changed with `DATA_DIR`.
 - Each auction also records when it opened and closed (`openedAt`, `closedAt`), written by the lifecycle job (RF17).
 - Run a **single** server process: two processes would each have their own copy in memory.
 - Node runs the JavaScript on one thread and every check-then-update in `server/src/services/` is synchronous,
   so two bids (or two signups with the same email) can never interleave.
 - Saving rewrites the whole file each time: simple, and fast enough at hackathon scale.
+
+### Server structure
+
+```
+server/src/
+├── index.ts            loads the saved data (or creates the sample data) and starts the server
+├── app.ts              routes, static files, and one error handler: refusals become their message
+├── errors.ts           AppError: a refusal with its status and message, from any layer
+├── config.ts           every limit and setting, overridable in .env (RF06)
+├── store.ts            the data in memory
+├── persistence.ts      store.json on disk; transaction() for every write
+├── socket.ts           live rooms (one per auction, with each connection's role), bids, headcount
+├── jobs.ts             timers: auctions opening/closing (RF17), session sweep
+├── seed.ts             sample data (RNF04), photos from server/seed-photos/
+├── routes/             auth, account, auctions: read the request, call a service, answer
+└── services/           the rules: auctions and bids, listings (new auctions), users, sessions,
+                        login attempts, passwords, photos
+```
 
 ### Client structure
 
@@ -236,7 +256,9 @@ client/src/
 │   ├── room.svelte.ts      AuctionRoom: joining an auction's live room
 │   ├── clock.svelte.ts     one ticking clock for all countdowns, synced with the server's
 │   ├── rules.ts            the server's limits and rules, fetched once
-│   └── components/         Header, AuctionHero, AuctionCard, BidForm, PasswordChecklist, ...
+│   ├── task.svelte.ts      a form's submit state (sending, error, success); shown by <TaskMessage>
+│   ├── storage.ts          localStorage/sessionStorage that also works when they're blocked
+│   └── components/         Header, AuctionHero (AuctionGallery + AuctionPanel), AuctionCard, BidForm, NewPassword, ...
 └── routes/
     ├── +page.svelte        featured auction carousel + open auctions (search, categories, "load more")
     ├── auctions/[id]/      listing (public) + live room (logged in)
@@ -245,3 +267,12 @@ client/src/
     ├── login/
     └── signup/
 ```
+
+### Tests
+
+`make test` (or `npm test`) builds the server and runs every suite in `tests/` against a real server on port 3399,
+each with a fresh data folder and its own settings (e.g. sessions that expire in seconds). Suites about restarts stop
+and start the server between their phases. `node tests/run.mjs bids spectators` runs only some of them. They cover
+accounts and sessions (RF01–RF04), creating and cancelling auctions (RF05–RF08), bids and their failures (RF09–RF14,
+including a failed save to disk), extension, opening/closing and restarts (RF15–RF18, RF20), spectators (RF25) and
+deleting accounts. The full run takes about 4 minutes.

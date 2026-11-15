@@ -1,41 +1,14 @@
-import { DELETE_ACCOUNT_CONFIRMATION, normalizeDisplayName, PASSWORD_LENGTH, type AccountDeletionBlockers } from '@auction/shared';
+import { DELETE_ACCOUNT_CONFIRMATION, type AccountDeletionBlockers } from '@auction/shared';
 import type { FastifyInstance } from 'fastify';
+import { AppError } from '../errors';
 import { accountDeletionBlockers } from '../services/auctions';
-import { cancelAttempt, finishAttempt, remainingMessage, startAttempt } from '../services/loginAttempts';
-import { hashPassword, verifyPassword } from '../services/passwords';
-import { deleteUserSessions } from '../services/sessions';
-import { anonymizeUser, findUserById, getPasswordHash, updatePasswordHash, updateUserName } from '../services/users';
-import { displayNameProblem, passwordProblem, sendLocked } from './auth';
+import { checkPassword } from '../services/loginAttempts';
+import { hashPassword } from '../services/passwords';
+import { anonymizeUser, checkNewPassword, getUser, parseDisplayName, toPublicUser, updateUser } from '../services/users';
+import { body, newPassword, password, text } from '../validation';
 
 // "Minha conta": the logged-in user's own data. The email identifies the account (RF01),
 // so it can't be changed here.
-
-const updateSchema = {
-  type: 'object',
-  required: ['name'],
-  additionalProperties: false,
-  properties: { name: { type: 'string', maxLength: 200 } },
-} as const;
-
-const passwordSchema = {
-  type: 'object',
-  required: ['currentPassword', 'newPassword'],
-  additionalProperties: false,
-  properties: {
-    currentPassword: { type: 'string', minLength: 1, maxLength: PASSWORD_LENGTH.max },
-    newPassword: { type: 'string', maxLength: PASSWORD_LENGTH.max },
-  },
-} as const;
-
-const deleteSchema = {
-  type: 'object',
-  required: ['password', 'confirmation'],
-  additionalProperties: false,
-  properties: {
-    password: { type: 'string', minLength: 1, maxLength: PASSWORD_LENGTH.max },
-    confirmation: { type: 'string', maxLength: 50 },
-  },
-} as const;
 
 function blockersMessage({ auctions, bids }: AccountDeletionBlockers): string {
   const parts: string[] = [];
@@ -47,48 +20,25 @@ function blockersMessage({ auctions, bids }: AccountDeletionBlockers): string {
 export default async function accountRoutes(app: FastifyInstance) {
   app.addHook('onRequest', app.authenticate);
 
-  app.patch<{ Body: { name: string } }>('/', { schema: { body: updateSchema } }, async (request, reply) => {
-    const name = normalizeDisplayName(request.body.name);
-    const problem = displayNameProblem(name);
-    if (problem) return reply.code(400).send({ message: problem });
-    return updateUserName(request.session!.user.id, name);
-  });
+  app.patch<{ Body: { name: string } }>('/', { schema: { body: body({ name: text(200) }) } }, async (request) =>
+    toPublicUser(updateUser(request.session!.user.id, { name: parseDisplayName(request.body.name) })),
+  );
 
   app.put<{ Body: { currentPassword: string; newPassword: string } }>(
     '/password',
-    { schema: { body: passwordSchema } },
+    { schema: { body: body({ currentPassword: password, newPassword }) } },
     async (request, reply) => {
       const { currentPassword, newPassword } = request.body;
       const session = request.session!;
-      const user = findUserById(session.user.id)!;
+      const user = getUser(session.user.id);
 
-      const problem =
-        passwordProblem(newPassword) ?? (newPassword === currentPassword ? 'A nova senha deve ser diferente da atual' : null);
-      if (problem) return reply.code(400).send({ message: problem });
+      checkNewPassword(newPassword);
+      if (newPassword === currentPassword) throw new AppError(400, 'A nova senha deve ser diferente da atual');
+      await checkPassword(user.email, currentPassword, user.passwordHash, { status: 403, message: 'Senha atual incorreta.' });
 
-      // Guessing the current password from a hijacked session counts toward the same limit as logins
-      const start = startAttempt(user.email);
-      if (!start.allowed) return sendLocked(reply, start.retryAfterMs);
-
-      let valid: boolean;
-      try {
-        valid = await verifyPassword(currentPassword, getPasswordHash(user.id)!);
-      } catch (err) {
-        cancelAttempt(user.email);
-        throw err;
-      }
-
-      const outcome = finishAttempt(user.email, valid);
-      if (!valid) {
-        if (outcome.locked) return sendLocked(reply, outcome.retryAfterMs);
-        return reply.code(403).send({ message: `Senha atual incorreta. ${remainingMessage(outcome.remaining)}` });
-      }
-
-      updatePasswordHash(user.id, await hashPassword(newPassword));
-
+      updateUser(user.id, { passwordHash: await hashPassword(newPassword) });
       // Anyone else logged in with the old password is logged out; this session stays
-      for (const sessionId of deleteUserSessions(user.id, session.id)) app.endSocketSession(sessionId);
-
+      app.endSessions((other) => other.userId === user.id && other.id !== session.id);
       return reply.code(204).send();
     },
   );
@@ -101,41 +51,20 @@ export default async function accountRoutes(app: FastifyInstance) {
   // "DELETAR". The account is anonymized, not erased: see anonymizeUser().
   app.post<{ Body: { password: string; confirmation: string } }>(
     '/delete',
-    { schema: { body: deleteSchema } },
+    { schema: { body: body({ password, confirmation: text(50) }) } },
     async (request, reply) => {
-      const session = request.session!;
-      const user = findUserById(session.user.id)!;
-
+      const user = getUser(request.session!.user.id);
       if (request.body.confirmation !== DELETE_ACCOUNT_CONFIRMATION) {
-        return reply.code(400).send({ message: `Digite ${DELETE_ACCOUNT_CONFIRMATION} para confirmar` });
+        throw new AppError(400, `Digite ${DELETE_ACCOUNT_CONFIRMATION} para confirmar`);
       }
-
-      // A wrong password counts toward the same limit as logins
-      const start = startAttempt(user.email);
-      if (!start.allowed) return sendLocked(reply, start.retryAfterMs);
-
-      let valid: boolean;
-      try {
-        valid = await verifyPassword(request.body.password, getPasswordHash(user.id)!);
-      } catch (err) {
-        cancelAttempt(user.email);
-        throw err;
-      }
-
-      const outcome = finishAttempt(user.email, valid);
-      if (!valid) {
-        if (outcome.locked) return sendLocked(reply, outcome.retryAfterMs);
-        return reply.code(403).send({ message: `Senha incorreta. ${remainingMessage(outcome.remaining)}` });
-      }
+      await checkPassword(user.email, request.body.password, user.passwordHash, { status: 403, message: 'Senha incorreta.' });
 
       // Checked after the (slow) password check and right before deleting, in the same
       // synchronous step: a bid or auction created meanwhile is always taken into account
       const blockers = accountDeletionBlockers(user.id);
-      if (blockers.auctions.length || blockers.bids.length) {
-        return reply.code(409).send({ message: blockersMessage(blockers), blockers });
-      }
+      if (blockers.auctions.length || blockers.bids.length) throw new AppError(409, blockersMessage(blockers), { blockers });
 
-      for (const sessionId of deleteUserSessions(user.id)) app.endSocketSession(sessionId);
+      app.endSessions((session) => session.userId === user.id);
       anonymizeUser(user.id);
       request.log.info({ userId: user.id }, 'Account deleted');
       return reply.code(204).send();

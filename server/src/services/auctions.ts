@@ -4,23 +4,28 @@ import {
   calculateMinIncrement,
   canCancel,
   DELETED_ACCOUNT_NAME,
+  formatMoney,
   isOpenStatus,
   listingOrder,
   MAX_BID,
   maskBidderName,
   minNextBid,
+  MINUTE,
   type AccountDeletionBlockers,
   type Auction,
   type AuctionDetail,
   type AuctionPage,
   type Bid,
-  type BidFailureCode,
+  type FailureCode,
 } from '@auction/shared';
 import { config } from '../config';
-import { saveStore } from '../persistence';
-import { bidKey, nextId, store, type AuctionRecord, type BidRecord, type ItemRecord } from '../store';
+import { AppError } from '../errors';
+import { transaction } from '../persistence';
+import { nextId, store, type AuctionRecord, type BidRecord, type ItemRecord } from '../store';
 
 const RECENT_BIDS = 10;
+
+const iso = (time: number) => new Date(time).toISOString();
 
 function toAuction(record: AuctionRecord): Auction {
   const item = store.items.get(record.itemId)!;
@@ -39,10 +44,10 @@ function toAuction(record: AuctionRecord): Auction {
     featured: record.featured,
     sellerId: record.sellerId,
     sellerName: store.users.get(record.sellerId)!.name,
-    startsAt: new Date(record.startsAt).toISOString(),
-    endsAt: new Date(record.endsAt).toISOString(),
-    originalEndsAt: new Date(record.originalEndsAt).toISOString(),
-    cancelledAt: record.cancelledAt === null ? null : new Date(record.cancelledAt).toISOString(),
+    startsAt: iso(record.startsAt),
+    endsAt: iso(record.endsAt),
+    originalEndsAt: iso(record.originalEndsAt),
+    cancelledAt: record.cancelledAt === null ? null : iso(record.cancelledAt),
   };
 }
 
@@ -64,12 +69,20 @@ function toBid(record: BidRecord): Bid {
     // A deleted account's placeholder is shown as is, not masked into "Conta E."
     bidderName: user.deletedAt === null ? maskBidderName(user.name) : DELETED_ACCOUNT_NAME,
     bidderTag: bidderTag(record.auctionId, record.userId),
-    createdAt: new Date(record.createdAt).toISOString(),
+    createdAt: iso(record.createdAt),
   };
 }
 
 /** Lowercase without accents, so "jacaranda" finds "jacarandá". */
 const searchable = (text: string) => text.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase();
+
+/** Scheduled and live auctions that pass `filter`, in the listing's order (RF20). */
+function openAuctions(filter: (item: ItemRecord) => boolean = () => true): AuctionRecord[] {
+  const now = Date.now();
+  return [...store.auctions.values()]
+    .filter((record) => isOpenStatus(auctionStatus(record, now)) && filter(store.items.get(record.itemId)!))
+    .sort((a, b) => listingOrder(a, b, now));
+}
 
 /**
  * The public listing (RF20): only scheduled and live auctions, live ones ending soonest first,
@@ -77,26 +90,21 @@ const searchable = (text: string) => text.normalize('NFD').replace(/\p{Diacritic
  * in the name, description and category, ignoring accents and case; the category must match
  * exactly. Ended and cancelled auctions stay reachable by their link.
  */
-export function listAuctions({ search, category, offset = 0, limit }: { search?: string; category?: string; offset?: number; limit: number }): AuctionPage {
-  const now = Date.now();
+export function listAuctions({ search, category, offset, limit }: { search?: string; category?: string; offset: number; limit: number }): AuctionPage {
   const term = search && searchable(search);
-  const matching = [...store.auctions.values()]
-    .filter((record) => {
-      const item = store.items.get(record.itemId)!;
-      if (category && item.category !== category) return false;
-      return !term || [item.title, item.description, item.category].some((field) => searchable(field).includes(term));
-    })
-    .map(toAuction)
-    .filter((auction) => isOpenStatus(auctionStatus(auction, now)))
-    .sort((a, b) => listingOrder(a, b, now));
-  return { auctions: matching.slice(offset, offset + limit), total: matching.length };
+  const matching = openAuctions(
+    (item) =>
+      (!category || item.category === category) &&
+      (!term || [item.title, item.description, item.category].some((field) => searchable(field).includes(term))),
+  );
+  return { auctions: matching.slice(offset, offset + limit).map(toAuction), total: matching.length };
 }
 
 /** Featured auctions still open, for the home page carousel; the first open one if none is. */
 export function featuredAuctions(max: number): Auction[] {
-  const { auctions } = listAuctions({ limit: Number.MAX_SAFE_INTEGER });
-  const featured = auctions.filter((auction) => auction.featured);
-  return (featured.length ? featured : auctions).slice(0, featured.length ? max : 1);
+  const open = openAuctions();
+  const featured = open.filter((record) => record.featured);
+  return (featured.length ? featured.slice(0, max) : open.slice(0, 1)).map(toAuction);
 }
 
 export function getAuction(id: number): Auction | undefined {
@@ -106,9 +114,7 @@ export function getAuction(id: number): Auction | undefined {
 
 export function getAuctionDetail(id: number): AuctionDetail | undefined {
   const auction = getAuction(id);
-  if (!auction) return undefined;
-  const recentBids = (store.bidsByAuction.get(id) ?? []).slice(-RECENT_BIDS).reverse().map(toBid);
-  return { ...auction, recentBids };
+  return auction && { ...auction, recentBids: store.bidsByAuction.get(id)!.slice(-RECENT_BIDS).reverse().map(toBid) };
 }
 
 export interface NewAuction {
@@ -125,37 +131,31 @@ export interface NewAuction {
 /** Creates the item and its first auction. Inputs must already be validated (see listings.ts). */
 export function createAuction(sellerId: number, input: NewAuction): Auction {
   const now = Date.now();
-  const item: ItemRecord = {
-    id: nextId('item'),
-    sellerId,
-    title: input.title,
-    description: input.description,
-    category: input.category,
-    photos: input.photos,
-    createdAt: now,
-  };
+  const { title, description, category, photos, startingPrice, startsAt } = input;
+  const endsAt = startsAt + input.durationMinutes * MINUTE;
+  const item: ItemRecord = { id: nextId('item'), sellerId, title, description, category, photos, createdAt: now };
   const auction: AuctionRecord = {
     id: nextId('auction'),
     itemId: item.id,
     sellerId,
-    startingPrice: input.startingPrice,
-    currentPrice: input.startingPrice,
+    startingPrice,
+    currentPrice: startingPrice,
     highestBidderId: null,
     bidCount: 0,
     featured: input.featured ?? false,
-    startsAt: input.startsAt,
-    endsAt: input.startsAt + input.durationMinutes * 60 * 1000,
-    originalEndsAt: input.startsAt + input.durationMinutes * 60 * 1000,
+    startsAt,
+    endsAt,
+    originalEndsAt: endsAt,
     cancelledAt: null,
     openedAt: null,
     closedAt: null,
     createdAt: now,
   };
-
-  store.items.set(item.id, item);
-  store.auctions.set(auction.id, auction);
-  store.bidsByAuction.set(auction.id, []);
-  saveStore();
+  transaction(() => {
+    store.items.set(item.id, item);
+    store.auctions.set(auction.id, auction);
+    store.bidsByAuction.set(auction.id, []);
+  });
   return toAuction(auction);
 }
 
@@ -166,25 +166,16 @@ export function createAuction(sellerId: number, input: NewAuction): Auction {
 export function accountDeletionBlockers(userId: number, now = Date.now()): AccountDeletionBlockers {
   const blockers: AccountDeletionBlockers = { auctions: [], bids: [] };
   for (const record of store.auctions.values()) {
-    const auction = toAuction(record);
-    const status = auctionStatus(auction, now);
-    if (status !== 'scheduled' && status !== 'live') continue;
+    const status = auctionStatus(record, now);
+    if (!isOpenStatus(status)) continue;
 
-    if (record.sellerId === userId) blockers.auctions.push({ id: auction.id, title: auction.title, status });
+    const { title } = store.items.get(record.itemId)!;
+    if (record.sellerId === userId) blockers.auctions.push({ id: record.id, title, status });
     else if (status === 'live' && store.bidsByAuction.get(record.id)!.some((bid) => bid.userId === userId)) {
-      blockers.bids.push({ id: auction.id, title: auction.title });
+      blockers.bids.push({ id: record.id, title });
     }
   }
   return blockers;
-}
-
-export class CancelError extends Error {
-  statusCode: number;
-
-  constructor(statusCode: number, message: string) {
-    super(message);
-    this.statusCode = statusCode;
-  }
 }
 
 /**
@@ -194,48 +185,25 @@ export class CancelError extends Error {
  */
 export function cancelAuction(auctionId: number, userId: number): Auction {
   const record = store.auctions.get(auctionId);
-  if (!record) throw new CancelError(404, 'Leilão não encontrado');
-  if (record.sellerId !== userId) throw new CancelError(403, 'Só quem anunciou o leilão pode cancelá-lo');
+  if (!record) throw new AppError(404, 'Leilão não encontrado');
+  if (record.sellerId !== userId) throw new AppError(403, 'Só quem anunciou o leilão pode cancelá-lo');
 
   const now = Date.now();
-  const auction = toAuction(record);
-  if (!canCancel(auction, now)) {
-    const status = auctionStatus(auction, now);
-    if (status === 'cancelled') throw new CancelError(409, 'Este leilão já foi cancelado');
-    if (status === 'live') throw new CancelError(409, 'Leilões com lances não podem ser cancelados');
-    throw new CancelError(409, 'Este leilão já terminou e não pode mais ser cancelado');
+  if (!canCancel(record, now)) {
+    const status = auctionStatus(record, now);
+    throw new AppError(
+      409,
+      status === 'cancelled'
+        ? 'Este leilão já foi cancelado'
+        : status === 'live'
+          ? 'Leilões com lances não podem ser cancelados'
+          : 'Este leilão já terminou e não pode mais ser cancelado',
+    );
   }
 
-  record.cancelledAt = now;
-  try {
-    saveStore();
-  } catch (err) {
-    record.cancelledAt = null; // not on disk, so not cancelled (same as a failed bid)
-    throw err;
-  }
+  transaction(() => (record.cancelledAt = now));
   return toAuction(record);
 }
-
-export class BidError extends Error {
-  currentMinBid: number;
-  code?: BidFailureCode;
-
-  constructor(message: string, currentMinBid: number, code?: BidFailureCode) {
-    super(message);
-    this.currentMinBid = currentMinBid;
-    this.code = code;
-  }
-}
-
-/** RF13: minimum time between bid attempts of the same user. */
-const BID_INTERVAL_MS = 500;
-
-/** Each user's last bid attempt that was processed (RF13). Not saved: it only matters for a moment. */
-const lastAttemptByUser = new Map<number, { at: number; key: string | undefined }>();
-
-const money = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
-
-const MINUTE = 60 * 1000;
 
 /**
  * RF15: a bid leaving less than the window on the clock moves the end to one window after the
@@ -248,6 +216,12 @@ function extendedEnd(auction: AuctionRecord, bidAt: number): number {
   const latest = auction.originalEndsAt + maxMinutes * MINUTE;
   return Math.max(auction.endsAt, Math.min(bidAt + windowMinutes * MINUTE, latest));
 }
+
+/** RF13: minimum time between bid attempts of the same user. */
+const BID_INTERVAL_MS = 500;
+
+/** Each user's last bid attempt that was processed (RF13). Not saved: it only matters for a moment. */
+const lastAttemptByUser = new Map<number, { at: number; key: string | undefined }>();
 
 /**
  * Validates and records a bid according to RF10 to RF14.
@@ -264,72 +238,68 @@ export function placeBid(
   now = Date.now(), // only the sample data passes another time
 ): { auction: Auction; bid: Bid; isReplay?: boolean } {
   const auction = store.auctions.get(auctionId);
-  if (!auction) throw new BidError('Leilão não encontrado', 0, 'INVALID_BID');
+  if (!auction) throw new AppError(404, 'Leilão não encontrado', { code: 'INVALID_BID' });
+  const bids = store.bidsByAuction.get(auctionId)!;
 
   // RF12: checked before anything else, so a re-sent bid gets its original result even if the
   // auction has moved on (outbid, ended) since. The key is saved with the bid, so this also
   // works after a restart.
-  const key = idempotencyKey ? bidKey(user.id, auctionId, idempotencyKey) : undefined;
-  const original = key && store.bidsByKey.get(key);
+  const original = idempotencyKey && bids.find((bid) => bid.userId === user.id && bid.idempotencyKey === idempotencyKey);
   if (original) return { auction: toAuction(auction), bid: toBid(original), isReplay: true };
 
-  const currentAuction = toAuction(auction);
-  const minimum = currentAuction.minBid;
+  const minimum = minNextBid(auction);
+  const refuse = (message: string, code: FailureCode) => new AppError(409, message, { code, currentMinBid: minimum });
 
   // RF13: checked before the rules, so refused attempts count too. A re-send of the attempt just
   // made (same key, e.g. a retry after no answer) is let through: it's re-checked below and can't
   // create a second bid (RF12). Refused-by-limit attempts don't restart the timer.
   const last = lastAttemptByUser.get(user.id);
   const resend = idempotencyKey !== undefined && last?.key === idempotencyKey;
-  if (last && !resend && now - last.at < BID_INTERVAL_MS) {
-    throw new BidError('Aguarde um instante antes de enviar outro lance.', minimum, 'RATE_LIMITED');
-  }
+  if (last && !resend && now - last.at < BID_INTERVAL_MS) throw refuse('Aguarde um instante antes de enviar outro lance.', 'RATE_LIMITED');
   lastAttemptByUser.set(user.id, { at: now, key: idempotencyKey });
 
   // RF10: every condition is checked when the bid is processed, not when it was sent
-  const status = auctionStatus(currentAuction, now);
-  if (status === 'cancelled') {
-    throw new BidError('Este leilão foi cancelado', minimum, 'NOT_IN_PROGRESS');
-  }
-  if (status === 'scheduled') {
-    throw new BidError('Este leilão ainda não começou', minimum, 'NOT_IN_PROGRESS');
-  }
+  const status = auctionStatus(auction, now);
   if (status !== 'live') {
-    throw new BidError('Este leilão já foi encerrado', minimum, 'NOT_IN_PROGRESS');
+    const reason = status === 'cancelled' ? 'foi cancelado' : status === 'scheduled' ? 'ainda não começou' : 'já foi encerrado';
+    throw refuse(`Este leilão ${reason}`, 'NOT_IN_PROGRESS');
   }
-  if (auction.sellerId === user.id) {
-    throw new BidError('Você não pode dar lances no próprio leilão', minimum, 'SELF_BID');
-  }
-  if (auction.highestBidderId === user.id) {
-    throw new BidError('Você já tem o maior lance', minimum, 'ALREADY_LEADER');
-  }
-
-  if (amount > MAX_BID) {
-    throw new BidError(`O lance pode ser de no máximo ${money.format(MAX_BID / 100)}`, minimum, 'INVALID_BID');
-  }
-  if (amount < minimum) {
-    throw new BidError(`O lance deve ser de no mínimo ${money.format(minimum / 100)}`, minimum, 'BELOW_MINIMUM');
-  }
+  if (auction.sellerId === user.id) throw refuse('Você não pode dar lances no próprio leilão', 'SELF_BID');
+  if (auction.highestBidderId === user.id) throw refuse('Você já tem o maior lance', 'ALREADY_LEADER');
+  if (amount > MAX_BID) throw refuse(`O lance pode ser de no máximo ${formatMoney(MAX_BID)}`, 'INVALID_BID');
+  if (amount < minimum) throw refuse(`O lance deve ser de no mínimo ${formatMoney(minimum)}`, 'BELOW_MINIMUM');
 
   const bid: BidRecord = { id: nextId('bid'), auctionId, userId: user.id, amount, createdAt: now, idempotencyKey: idempotencyKey ?? null };
-  const bids = store.bidsByAuction.get(auctionId)!;
-  const before = { currentPrice: auction.currentPrice, highestBidderId: auction.highestBidderId, bidCount: auction.bidCount, endsAt: auction.endsAt };
-  bids.push(bid);
-  if (key) store.bidsByKey.set(key, bid);
-  auction.currentPrice = amount;
-  auction.highestBidderId = user.id;
-  auction.bidCount++;
-  auction.endsAt = extendedEnd(auction, now);
-  try {
-    saveStore(); // on disk before anyone is told about it (RF11)
-  } catch (err) {
-    // Not on disk means not accepted: undo it, or it would be saved silently with the next change
-    // while the bidder was told it failed and the room never heard of it
-    bids.pop();
-    if (key) store.bidsByKey.delete(key);
-    Object.assign(auction, before);
-    throw err;
-  }
-
+  // On disk before anyone is told about it (RF11)
+  transaction(() => {
+    bids.push(bid);
+    auction.currentPrice = amount;
+    auction.highestBidderId = user.id;
+    auction.bidCount++;
+    auction.endsAt = extendedEnd(auction, now);
+  });
   return { auction: toAuction(auction), bid: toBid(bid) };
+}
+
+/**
+ * RF17/RF18: records the openings and closings due at `now`, each exactly once (see jobs.ts),
+ * and returns the auctions that changed.
+ */
+export function recordTransitions(now = Date.now()): { auction: Auction; closed: boolean }[] {
+  const due: { record: AuctionRecord; opens: boolean; closes: boolean }[] = [];
+  for (const record of store.auctions.values()) {
+    if (record.cancelledAt !== null) continue;
+    const opens = record.openedAt === null && record.startsAt <= now;
+    const closes = record.closedAt === null && record.endsAt <= now;
+    if (opens || closes) due.push({ record, opens, closes });
+  }
+  if (!due.length) return [];
+
+  transaction(() => {
+    for (const { record, opens, closes } of due) {
+      if (opens) record.openedAt = now;
+      if (closes) record.closedAt = now;
+    }
+  });
+  return due.map(({ record, closes }) => ({ auction: toAuction(record), closed: closes }));
 }

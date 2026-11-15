@@ -1,33 +1,20 @@
 <script lang="ts">
-  import {
-    AUCTION_STATUS_LABELS,
-    DELETE_ACCOUNT_CONFIRMATION,
-    DISPLAY_NAME_LENGTH,
-    normalizeDisplayName,
-    PASSWORD_LENGTH,
-    passwordProblems,
-    type AccountDeletionBlockers,
-  } from '@auction/shared';
+  import { AUCTION_STATUS_LABELS, DELETE_ACCOUNT_CONFIRMATION, DISPLAY_NAME_LENGTH, normalizeDisplayName, PASSWORD_LENGTH, type AccountDeletionBlockers } from '@auction/shared';
   import { goto } from '$app/navigation';
   import { ApiError, api } from '#lib/api.ts';
-  import { auth } from '#lib/auth.svelte.ts';
-  import PasswordChecklist from '#lib/components/PasswordChecklist.svelte';
+  import { auth, requireLogin } from '#lib/auth.svelte.ts';
+  import NewPassword, { newPasswordProblem } from '#lib/components/NewPassword.svelte';
+  import TaskMessage from '#lib/components/TaskMessage.svelte';
   import { formatDate } from '#lib/format.ts';
-
-  type Feedback = { kind: 'error' | 'success'; text: string } | null;
+  import { Task } from '#lib/task.svelte.ts';
 
   /** Set right after deleting the account, so we go home instead of to the login page. */
   let deleted = false;
-
-  // The account page requires login
-  $effect(() => {
-    if (auth.ready && !auth.user && !deleted) goto('/login?redirect=/account', { replace: true });
-  });
+  requireLogin(() => deleted);
 
   // --- Display name
   let name = $state(auth.user?.name ?? '');
-  let savingName = $state(false);
-  let nameFeedback = $state<Feedback>(null);
+  const saveName = new Task();
 
   // Fill the field once the session is restored (e.g. when opening this page directly)
   $effect(() => {
@@ -36,57 +23,30 @@
 
   const nameChanged = $derived(!!auth.user && normalizeDisplayName(name) !== auth.user.name);
 
-  async function saveName(event: SubmitEvent) {
+  async function submitName(event: SubmitEvent) {
     event.preventDefault();
-    savingName = true;
-    nameFeedback = null;
-    try {
-      await auth.updateName(name);
-      name = auth.user!.name;
-      nameFeedback = { kind: 'success', text: 'Nome atualizado.' };
-    } catch (err) {
-      nameFeedback = { kind: 'error', text: (err as Error).message };
-    } finally {
-      savingName = false;
-    }
+    if (await saveName.run(() => auth.updateName(name), 'Nome atualizado.')) name = auth.user!.name;
   }
 
   // --- Password
   let currentPassword = $state('');
   let newPassword = $state('');
   let confirmation = $state('');
-  let changingPassword = $state(false);
-  let passwordFeedback = $state<Feedback>(null);
   let attempted = $state(false);
+  const changePassword = new Task();
 
-  const newPasswordValid = $derived(passwordProblems(newPassword).length === 0);
-  const passwordsMatch = $derived(newPassword === confirmation);
-  const showMismatch = $derived(!passwordsMatch && (attempted || confirmation.length >= newPassword.length));
-
-  async function changePassword(event: SubmitEvent) {
+  async function submitPassword(event: SubmitEvent) {
     event.preventDefault();
     attempted = true;
-    passwordFeedback = null;
-
-    if (!newPasswordValid) {
-      passwordFeedback = { kind: 'error', text: 'A nova senha ainda não atende a todos os requisitos.' };
-      return;
-    }
-    if (!passwordsMatch) {
-      passwordFeedback = { kind: 'error', text: 'As senhas não coincidem.' };
-      return;
-    }
-
-    changingPassword = true;
-    try {
-      await auth.changePassword(currentPassword, newPassword);
+    const problem = newPasswordProblem(newPassword, confirmation);
+    if (problem) return changePassword.fail(problem);
+    const done = await changePassword.run(
+      () => auth.changePassword(currentPassword, newPassword),
+      'Senha alterada. Suas outras sessões foram encerradas.',
+    );
+    if (done) {
       currentPassword = newPassword = confirmation = '';
       attempted = false;
-      passwordFeedback = { kind: 'success', text: 'Senha alterada. Suas outras sessões foram encerradas.' };
-    } catch (err) {
-      passwordFeedback = { kind: 'error', text: (err as Error).message };
-    } finally {
-      changingPassword = false;
     }
   }
 
@@ -95,12 +55,11 @@
   let blockersError = $state<string | null>(null);
   let deletePassword = $state('');
   let deleteConfirmation = $state('');
-  let deleting = $state(false);
-  let deleteError = $state<string | null>(null);
+  const deleteAccount = new Task();
 
   const userId = $derived(auth.user?.id);
   const blocked = $derived(!!blockers && (blockers.auctions.length > 0 || blockers.bids.length > 0));
-  const canSubmitDelete = $derived(!!deletePassword && deleteConfirmation === DELETE_ACCOUNT_CONFIRMATION && !deleting);
+  const canSubmitDelete = $derived(!!deletePassword && deleteConfirmation === DELETE_ACCOUNT_CONFIRMATION && !deleteAccount.pending);
 
   async function loadBlockers() {
     blockersError = null;
@@ -115,22 +74,20 @@
     if (userId !== undefined) loadBlockers();
   });
 
-  async function deleteAccount(event: SubmitEvent) {
+  function submitDelete(event: SubmitEvent) {
     event.preventDefault();
-    deleting = true;
-    deleteError = null;
-    try {
+    deleteAccount.run(async () => {
       deleted = true;
-      await auth.deleteAccount(deletePassword, deleteConfirmation);
+      try {
+        await auth.deleteAccount(deletePassword, deleteConfirmation);
+      } catch (err) {
+        deleted = false;
+        // Something new is open (e.g. a bid placed in another tab): show the updated list
+        if (err instanceof ApiError && err.status === 409) await loadBlockers();
+        throw err;
+      }
       await goto('/', { replace: true });
-    } catch (err) {
-      deleted = false;
-      deleteError = (err as Error).message;
-      // Something new is open (e.g. a bid placed in another tab): show the updated list
-      if (err instanceof ApiError && err.status === 409) await loadBlockers();
-    } finally {
-      deleting = false;
-    }
+    });
   }
 </script>
 
@@ -145,7 +102,7 @@
       <p class="muted">Membro desde {formatDate(auth.user.createdAt)}</p>
     </header>
 
-    <form class="auth-card" onsubmit={saveName}>
+    <form class="auth-card" onsubmit={submitName}>
       <h2>Seus dados</h2>
 
       <label>
@@ -167,16 +124,14 @@
         <small id="email-hint" class="muted">O e-mail identifica sua conta e não pode ser alterado.</small>
       </label>
 
-      {#if nameFeedback}
-        <p class="alert alert-{nameFeedback.kind}" role="status">{nameFeedback.text}</p>
-      {/if}
+      <TaskMessage task={saveName} />
 
-      <button class="btn btn-primary" disabled={savingName || !nameChanged}>
-        {savingName ? 'Salvando…' : 'Salvar nome'}
+      <button class="btn btn-primary" disabled={saveName.pending || !nameChanged}>
+        {saveName.pending ? 'Salvando…' : 'Salvar nome'}
       </button>
     </form>
 
-    <form class="auth-card" onsubmit={changePassword}>
+    <form class="auth-card" onsubmit={submitPassword}>
       <div>
         <h2>Alterar senha</h2>
         <p class="muted">Ao alterar a senha, você continua conectado aqui e sai dos outros dispositivos.</p>
@@ -187,48 +142,12 @@
         <input class="input" type="password" autocomplete="current-password" required maxlength={PASSWORD_LENGTH.max} bind:value={currentPassword} />
       </label>
 
-      <label>
-        <span>Nova senha</span>
-        <input
-          class="input"
-          type="password"
-          autocomplete="new-password"
-          required
-          maxlength={PASSWORD_LENGTH.max}
-          aria-invalid={attempted && !newPasswordValid}
-          aria-describedby="new-password-rules"
-          bind:value={newPassword}
-        />
-      </label>
-      <div id="new-password-rules">
-        <PasswordChecklist password={newPassword} />
-      </div>
+      <NewPassword bind:password={newPassword} bind:confirmation {attempted} label="Nova senha" />
 
-      <label>
-        <span>Confirme a nova senha</span>
-        <input
-          class="input"
-          type="password"
-          autocomplete="new-password"
-          required
-          maxlength={PASSWORD_LENGTH.max}
-          aria-invalid={showMismatch}
-          aria-describedby="new-confirmation-hint"
-          bind:value={confirmation}
-        />
-        {#if showMismatch}
-          <small id="new-confirmation-hint" class="field-error">As senhas não coincidem</small>
-        {:else if confirmation && passwordsMatch}
-          <small id="new-confirmation-hint" class="field-ok">As senhas coincidem</small>
-        {/if}
-      </label>
+      <TaskMessage task={changePassword} />
 
-      {#if passwordFeedback}
-        <p class="alert alert-{passwordFeedback.kind}" role="status">{passwordFeedback.text}</p>
-      {/if}
-
-      <button class="btn btn-primary" disabled={changingPassword}>
-        {changingPassword ? 'Alterando…' : 'Alterar senha'}
+      <button class="btn btn-primary" disabled={changePassword.pending}>
+        {changePassword.pending ? 'Alterando…' : 'Alterar senha'}
       </button>
     </form>
 
@@ -267,7 +186,7 @@
           <button class="btn btn-ghost refresh" type="button" onclick={loadBlockers}>Verificar novamente</button>
         </div>
       {:else}
-        <form onsubmit={deleteAccount}>
+        <form onsubmit={submitDelete}>
           <label>
             <span>Sua senha</span>
             <input class="input" type="password" autocomplete="current-password" required maxlength={PASSWORD_LENGTH.max} bind:value={deletePassword} />
@@ -278,11 +197,9 @@
             <input class="input" autocomplete="off" autocapitalize="characters" spellcheck="false" required bind:value={deleteConfirmation} />
           </label>
 
-          {#if deleteError}
-            <p class="alert alert-error" role="alert">{deleteError}</p>
-          {/if}
+          <TaskMessage task={deleteAccount} />
 
-          <button class="btn danger" disabled={!canSubmitDelete}>{deleting ? 'Excluindo…' : 'Excluir minha conta'}</button>
+          <button class="btn danger" disabled={!canSubmitDelete}>{deleteAccount.pending ? 'Excluindo…' : 'Excluir minha conta'}</button>
         </form>
       {/if}
     </section>

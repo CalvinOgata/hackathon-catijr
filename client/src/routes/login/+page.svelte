@@ -2,27 +2,22 @@
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import { auth } from '#lib/auth.svelte.ts';
+  import TaskMessage from '#lib/components/TaskMessage.svelte';
   import { safeRedirect } from '#lib/format.ts';
+  import { Task } from '#lib/task.svelte.ts';
 
   let email = $state('');
   let password = $state('');
-  let error = $state<string | null>(null);
-  let submitting = $state(false);
+  const login = new Task();
 
   const redirect = $derived(safeRedirect(page.url.searchParams.get('redirect')));
 
-  async function submit(event: SubmitEvent) {
+  function submit(event: SubmitEvent) {
     event.preventDefault();
-    submitting = true;
-    error = null;
-    try {
+    login.run(async () => {
       await auth.login(email, password);
       await goto(redirect);
-    } catch (err) {
-      error = (err as Error).message;
-    } finally {
-      submitting = false;
-    }
+    });
   }
 </script>
 
@@ -47,11 +42,9 @@
       <input class="input" type="password" autocomplete="current-password" required bind:value={password} />
     </label>
 
-    {#if error}
-      <p class="alert alert-error" role="alert">{error}</p>
-    {/if}
+    <TaskMessage task={login} />
 
-    <button class="btn btn-primary" disabled={submitting}>{submitting ? 'Entrando…' : 'Entrar'}</button>
+    <button class="btn btn-primary" disabled={login.pending}>{login.pending ? 'Entrando…' : 'Entrar'}</button>
 
     <p class="muted switch">
       Ainda não tem conta? <a href="/signup?redirect={encodeURIComponent(redirect)}">Criar conta</a>

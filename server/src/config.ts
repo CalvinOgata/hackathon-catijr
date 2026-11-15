@@ -1,11 +1,10 @@
-import { CATEGORIES, type ListingRules } from '@auction/shared';
+import { CATEGORIES, MINUTE, type ListingRules } from '@auction/shared';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 if (existsSync('.env')) process.loadEnvFile('.env');
 
-const MINUTE = 60 * 1000;
-const DAY = 24 * 60;
+const MINUTES_PER_DAY = 24 * 60;
 
 const env = (name: string, fallback: number) => Number(process.env[name] ?? fallback);
 
@@ -26,8 +25,8 @@ const listing: ListingRules = {
     types: ['image/jpeg', 'image/png', 'image/webp'],
   },
   price: { min: 100, max: 100_000_000_00 }, // R$ 1,00 to R$ 100 million
-  leadMinutes: { min: env('LISTING_MIN_LEAD_MINUTES', 1), max: env('LISTING_MAX_LEAD_DAYS', 30) * DAY },
-  durationMinutes: { min: env('LISTING_MIN_DURATION_MINUTES', 3), max: env('LISTING_MAX_DURATION_DAYS', 7) * DAY },
+  leadMinutes: { min: env('LISTING_MIN_LEAD_MINUTES', 1), max: env('LISTING_MAX_LEAD_DAYS', 30) * MINUTES_PER_DAY },
+  durationMinutes: { min: env('LISTING_MIN_DURATION_MINUTES', 3), max: env('LISTING_MAX_DURATION_DAYS', 7) * MINUTES_PER_DAY },
   // Team decision (RF15): the reference rule. Late bids can't win without giving others time to
   // answer, and the 30-minute cap keeps an auction from going on forever.
   extension: { windowMinutes: env('BID_EXTENSION_WINDOW_MINUTES', 2), maxMinutes: env('BID_EXTENSION_MAX_MINUTES', 30) },
@@ -35,7 +34,7 @@ const listing: ListingRules = {
 
 export const config = {
   isProduction: process.env.NODE_ENV === 'production',
-  port: Number(process.env.PORT ?? 3333),
+  port: env('PORT', 3333),
   host: process.env.HOST ?? '0.0.0.0',
   corsOrigin: process.env.CORS_ORIGIN ?? 'http://localhost:5173',
   /** Where the JSON data file and the uploaded photos are kept, on the VM's disk. */
@@ -46,13 +45,13 @@ export const config = {
   login: {
     // Team decision: after this many wrong passwords in a row, the account's login is
     // locked for a while (also counts wrong "current password" on the account page).
-    maxAttempts: Number(process.env.LOGIN_MAX_ATTEMPTS ?? 3),
-    lockMs: Number(process.env.LOGIN_LOCK_MINUTES ?? 15) * MINUTE,
+    maxAttempts: env('LOGIN_MAX_ATTEMPTS', 3),
+    lockMs: env('LOGIN_LOCK_MINUTES', 15) * MINUTE,
   },
   session: {
     // Team decision (RF02): sliding sessions. Each authenticated action renews the
     // idle timeout, but a session never outlives its absolute lifetime.
-    idleTimeoutMs: Number(process.env.SESSION_IDLE_MINUTES ?? 120) * MINUTE,
-    maxLifetimeMs: Number(process.env.SESSION_MAX_DAYS ?? 7) * 24 * 60 * MINUTE,
+    idleTimeoutMs: env('SESSION_IDLE_MINUTES', 120) * MINUTE,
+    maxLifetimeMs: env('SESSION_MAX_DAYS', 7) * MINUTES_PER_DAY * MINUTE,
   },
 };
